@@ -58,6 +58,7 @@ const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/documents",
   "https://www.googleapis.com/auth/drive.file",
 ];
+const GOOGLE_CONNECTION_PENDING_KEY = "openworkflow.googleConnectionPending";
 
 function connectionError(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
@@ -129,12 +130,20 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const integration = params.get("integration");
     const status = params.get("status");
-    if (!integration) return;
+    const pendingGoogleConnection = window.sessionStorage.getItem(GOOGLE_CONNECTION_PENDING_KEY) === "true";
+    if (!integration && !pendingGoogleConnection) return;
     const detail = params.get("detail");
     window.history.replaceState({}, "", window.location.pathname);
-    if (integration === "google" && status === "connected") {
+    if ((integration === "google" && status === "connected") || (!integration && pendingGoogleConnection)) {
       setConnectionBusy("google");
-      void convexClient.action(syncGoogleRef, {}).then(refreshConnections).then(() => setNotice("Google Workspace connected")).catch((error) => setNotice(connectionError(error, "Google connection could not be synchronized"))).finally(() => setConnectionBusy(undefined));
+      void convexClient.action(syncGoogleRef, {})
+        .then(refreshConnections)
+        .then(() => setNotice("Google Workspace connected"))
+        .catch((error) => setNotice(connectionError(error, "Google connection could not be synchronized")))
+        .finally(() => {
+          window.sessionStorage.removeItem(GOOGLE_CONNECTION_PENDING_KEY);
+          setConnectionBusy(undefined);
+        });
     } else if (integration === "slack" && status === "connected") {
       void refreshConnections().then(() => setNotice("Slack workspace connected"));
     } else {
@@ -153,8 +162,10 @@ export default function App() {
         : await createGoogleAccount({ strategy: "oauth_google", additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" });
       const verificationUrl = account?.verification?.externalVerificationRedirectURL;
       if (!verificationUrl) throw new Error("Clerk did not return a Google authorization URL.");
+      window.sessionStorage.setItem(GOOGLE_CONNECTION_PENDING_KEY, "true");
       window.location.assign(verificationUrl.href);
     } catch (error) {
+      window.sessionStorage.removeItem(GOOGLE_CONNECTION_PENDING_KEY);
       setConnectionBusy(undefined);
       setNotice(connectionError(error, "Could not start Google authorization"));
     }

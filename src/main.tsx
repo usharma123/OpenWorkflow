@@ -10,6 +10,10 @@ import App from "./App";
 import { convexClient } from "./lib/convexClient";
 
 const clerkKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY?.trim();
+const clerkRedirectProps = {
+  signInFallbackRedirectUrl: "/",
+  signUpFallbackRedirectUrl: "/",
+} as const;
 
 function SetupRequired() {
   return (
@@ -37,13 +41,13 @@ function Root() {
   if (!clerkKey || !convexClient) return <SetupRequired />;
   if (window.location.pathname === "/sso-callback") {
     return (
-      <ClerkProvider publishableKey={clerkKey}>
+      <ClerkProvider publishableKey={clerkKey} {...clerkRedirectProps}>
         <AuthenticateWithRedirectCallback signInFallbackRedirectUrl="/?integration=google&status=connected" signUpFallbackRedirectUrl="/?integration=google&status=connected" />
       </ClerkProvider>
     );
   }
   return (
-    <ClerkProvider publishableKey={clerkKey}>
+    <ClerkProvider publishableKey={clerkKey} {...clerkRedirectProps}>
       <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
         <AppGate />
       </ConvexProviderWithClerk>

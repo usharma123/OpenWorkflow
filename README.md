@@ -93,6 +93,8 @@ In Clerk:
 
 The product's **Connect Google** button uses Clerk's `createExternalAccount()` or `reauthorize()` flow with those same scopes. Convex calls `getUserOauthAccessToken(userId, "google")` for every durable Gmail or Docs action and matches the selected external account ID. Google tokens never enter local storage, workflow definitions, or Convex tables.
 
+Keep the app origin and callback routes available throughout Clerk's verification flow. In development, Clerk may send a session reverification through its hosted Account Portal before returning to the app. `ClerkProvider` therefore uses `/` as its sign-in and sign-up fallback, while `/sso-callback` remains the normal OAuth callback. A same-tab `sessionStorage` marker contains only the boolean fact that Google synchronization is pending; it never contains a provider token or account data. Returning to either route causes the server to read the verified external account from Clerk and persist only safe metadata in Convex.
+
 Disconnect removes the Clerk external account. Clerk may reject removal when it is the user's only sign-in factor; add another sign-in method first in that case.
 
 ## 4. Configure Slack OAuth
@@ -151,4 +153,4 @@ bun run typecheck
 bun run build
 ```
 
-`bunx convex codegen` requires `CLERK_JWT_ISSUER_DOMAIN` to already be set on the selected Convex deployment. Real OAuth success testing additionally requires administrator-created Google and Slack apps plus explicit user consent; the UI never simulates a completed grant.
+`bunx convex codegen` requires `CLERK_JWT_ISSUER_DOMAIN` to already be set on the selected Convex deployment. Real Google success testing additionally requires an administrator-created Google OAuth client, Clerk custom Google credentials, and explicit user consent. Real Slack success testing separately requires a configured Slack app and explicit workspace authorization. The UI never simulates a completed grant.

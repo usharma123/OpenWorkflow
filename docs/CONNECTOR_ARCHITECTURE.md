@@ -34,7 +34,7 @@ The access token remains in Clerk. For each durable Gmail or Google Docs action,
 6. Marks the connection `needs_reauth` on a missing token, missing scope, 401, or 403.
 7. Persists only privacy-filtered results and audit metadata.
 
-The frontend's connect path uses Clerk `createExternalAccount()` for a new Google account and `reauthorize()` for an existing one. Both request the same explicit scopes and return through `/sso-callback`.
+The frontend's connect path uses Clerk `createExternalAccount()` for a new Google account and `reauthorize()` for an existing one. Both request the same explicit scopes and normally return through `/sso-callback`. Clerk session reverification can return through the app's `/` fallback instead, so a same-tab boolean `sessionStorage` marker triggers the same server-side reconciliation there. The marker carries no token or provider data and is cleared after reconciliation.
 
 ## Slack
 
