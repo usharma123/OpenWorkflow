@@ -6,6 +6,7 @@ import { internal } from "./_generated/api";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { decryptSecret } from "./secretCrypto";
 import { hasRequiredScopes } from "./policies";
+import { renderTemplate } from "./template";
 
 type WorkflowNode = {
   data: { nodeType: string; config: Record<string, unknown> };
@@ -16,17 +17,6 @@ const DOCS_SCOPES = [
   "https://www.googleapis.com/auth/documents",
   "https://www.googleapis.com/auth/drive.file",
 ];
-
-function renderTemplate(template: string, input: unknown): string {
-  return template.replace(/\{\{\s*input(?:\.([\w.]+))?\s*\}\}/g, (_, path?: string) => {
-    const value = path
-      ? path.split(".").reduce<unknown>((current, key) =>
-          current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined,
-        input)
-      : input;
-    return typeof value === "string" ? value : JSON.stringify(value ?? "");
-  });
-}
 
 async function markNeedsReauth(ctx: ActionCtx, ownerKey: string, externalId: string, scopes?: string[]) {
   await ctx.runMutation(internal.connections.setStatus, {
@@ -121,7 +111,7 @@ export const executeLiveConnector = internalAction({
       if (!updateResponse.ok) throw new Error(`Google Docs created the file but could not add the brief (${updateResponse.status}).`);
       const folderName = String(config.folder ?? "").trim();
       if (folderName) {
-        const escapedName = folderName.replaceAll("'", "\\'");
+        const escapedName = folderName.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
         const search = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`)}&fields=files(id,name)&spaces=drive&pageSize=1`, {
           headers: { Authorization: `Bearer ${oauth.token}` },
         });
@@ -164,6 +154,7 @@ export const executeLiveConnector = internalAction({
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ channel, text: message, unfurl_links: false }),
+        signal: AbortSignal.timeout(10_000),
       });
       const payload = (await response.json()) as { ok?: boolean; error?: string; ts?: string; channel?: string };
       if (!response.ok || !payload.ok) {

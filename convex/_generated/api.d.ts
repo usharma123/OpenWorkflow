@@ -19,6 +19,7 @@ import type * as policies from "../policies.js";
 import type * as runs from "../runs.js";
 import type * as schedules from "../schedules.js";
 import type * as secretCrypto from "../secretCrypto.js";
+import type * as template from "../template.js";
 import type * as webhooks from "../webhooks.js";
 import type * as workflows from "../workflows.js";
 
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   runs: typeof runs;
   schedules: typeof schedules;
   secretCrypto: typeof secretCrypto;
+  template: typeof template;
   webhooks: typeof webhooks;
   workflows: typeof workflows;
 }>;

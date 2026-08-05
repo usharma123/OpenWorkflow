@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { applyApprovalDecision } from "./policies";
+import { renderTemplate, valueAtPath } from "./template";
 
 export const workflow = new WorkflowManager(components.workflow);
 
@@ -66,21 +67,6 @@ function topologicalSort(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
   }
   if (ordered.length !== nodes.length) throw new Error("Workflow graphs cannot contain cycles.");
   return ordered;
-}
-
-function valueAtPath(value: unknown, path: string): unknown {
-  if (!path) return value;
-  return path.split(".").reduce<unknown>((current, key) => {
-    if (current && typeof current === "object") return (current as Record<string, unknown>)[key];
-    return undefined;
-  }, value);
-}
-
-function renderTemplate(template: string, input: unknown): string {
-  return template.replace(/\{\{\s*input(?:\.([\w.]+))?\s*\}\}/g, (_, path?: string) => {
-    const value = valueAtPath(input, path ?? "");
-    return typeof value === "string" ? value : JSON.stringify(value ?? "");
-  });
 }
 
 function isPrivateHost(hostname: string) {
@@ -381,10 +367,15 @@ export const executeWorkflow = workflow
           });
           value = applyApprovalDecision(value, approval, Date.now());
         } else {
+          const isNonIdempotentLiveWrite =
+            String(node.data.config.executionMode ?? "demo") === "live" &&
+            (node.data.nodeType === "googleDoc" || node.data.nodeType === "slack");
           value = await step.runAction(
             internal.executor.executeNode,
             { node, input: value, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId },
-            { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },
+            isNonIdempotentLiveWrite
+              ? undefined
+              : { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },
           );
         }
 
