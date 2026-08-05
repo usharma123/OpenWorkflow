@@ -37,13 +37,16 @@ function ConnectionMode({ mode, onChange }: { mode: string; onChange: (value: st
 
 function ConnectionField({ provider, value, onChange, connections, onOpenConnectors }: { provider: "google" | "slack"; value: string; onChange: (value: string) => void; connections: ConnectionMetadata[]; onOpenConnectors: () => void }) {
   const available = connections.filter((connection) => connection.provider === provider && connection.status === "active");
+  const selected = available.some((connection) => connection.externalId === value) ? value : "";
+  const selectId = `connection-${provider}`;
   return (
     <div className="field connection-field">
-      <span>Connected account</span>
-      <select value={available.some((connection) => connection.externalId === value) ? value : ""} onChange={(event) => onChange(event.target.value)}>
+      <label htmlFor={selectId}>Connected account</label>
+      <select id={selectId} value={selected} onChange={(event) => onChange(event.target.value)}>
         <option value="">{available.length ? "Choose an account…" : "No active connection"}</option>
         {available.map((connection) => <option key={connection.externalId} value={connection.externalId}>{connection.ownerLabel}</option>)}
       </select>
+      {value && !selected && <small>The previously selected account is no longer active. Choose another account before running.</small>}
       <button type="button" className="manage-connection" onClick={onOpenConnectors}>{available.length ? "Manage connections" : `Connect ${provider === "google" ? "Google Workspace" : "Slack"}`}</button>
     </div>
   );
@@ -72,7 +75,10 @@ export function Inspector({ node, onChange, onClose, onDelete, onDuplicate, conn
         <section className="inspector-section">
           <h3>Set up this step</h3>
           {item.setup === "connection" && <ConnectionMode mode={String(config.executionMode ?? "demo")} onChange={(value) => setConfig("executionMode", value)} />}
-          {node.data.nodeType === "gmailTrigger" && <><TextField label="Which emails should be included?" value={String(config.search ?? "")} onChange={(value) => setConfig("search", value)} placeholder="is:unread newer_than:1d" /><label className="field"><span>Maximum number of emails</span><input type="number" min={1} max={25} value={Number(config.maxMessages ?? 5)} onChange={(event) => setConfig("maxMessages", Number(event.target.value))} /></label><ConnectionField provider="google" value={String(config.connectionRef ?? "")} onChange={(value) => setConfig("connectionRef", value)} connections={connections} onOpenConnectors={onOpenConnectors} /></>}
+          {node.data.nodeType === "gmailTrigger" && <><TextField label="Which emails should be included?" value={String(config.search ?? "")} onChange={(value) => setConfig("search", value)} placeholder="is:unread newer_than:1d" /><label className="field"><span>Maximum number of emails</span><input type="number" min={1} max={25} value={Number(config.maxMessages ?? 5)} onChange={(event) => {
+            const parsed = Number(event.target.value);
+            setConfig("maxMessages", Number.isFinite(parsed) ? Math.min(25, Math.max(1, Math.trunc(parsed))) : 5);
+          }} /></label><ConnectionField provider="google" value={String(config.connectionRef ?? "")} onChange={(value) => setConfig("connectionRef", value)} connections={connections} onOpenConnectors={onOpenConnectors} /></>}
           {node.data.nodeType === "ai" && <><label className="field"><span>AI model</span><select value={String(config.model ?? "openai/gpt-5.6-luna")} onChange={(event) => setConfig("model", event.target.value)}><option value="openai/gpt-5.6-luna">GPT-5.6 Luna (OpenRouter)</option></select></label><TextField label="Role and writing style" multiline value={String(config.systemPrompt ?? "")} onChange={(value) => setConfig("systemPrompt", value)} /><TextField label="Instructions" multiline value={String(config.prompt ?? "")} onChange={(value) => setConfig("prompt", value)} /><label className="toggle-row"><span><strong>Use web search</strong><small>Add current web sources when needed</small></span><input type="checkbox" checked={Boolean(config.webSearch)} onChange={(event) => setConfig("webSearch", event.target.checked)} /></label>{Boolean(config.webSearch) && <label className="field"><span>Maximum sources</span><input type="number" min={1} max={10} value={Number(config.maxSearchResults ?? 5)} onChange={(event) => setConfig("maxSearchResults", Number(event.target.value))} /></label>}</>}
           {node.data.nodeType === "googleDoc" && <><TextField label="Document title" value={String(config.title ?? "")} onChange={(value) => setConfig("title", value)} /><TextField label="Save in folder" value={String(config.folder ?? "")} onChange={(value) => setConfig("folder", value)} /><ConnectionField provider="google" value={String(config.connectionRef ?? "")} onChange={(value) => setConfig("connectionRef", value)} connections={connections} onOpenConnectors={onOpenConnectors} /></>}
           {node.data.nodeType === "slack" && <><TextField label="Slack channel ID" value={String(config.channel ?? "")} onChange={(value) => setConfig("channel", value)} placeholder="C0123456789" /><TextField label="Message" multiline value={String(config.message ?? "")} onChange={(value) => setConfig("message", value)} /><ConnectionField provider="slack" value={String(config.connectionRef ?? "")} onChange={(value) => setConfig("connectionRef", value)} connections={connections} onOpenConnectors={onOpenConnectors} /></>}
