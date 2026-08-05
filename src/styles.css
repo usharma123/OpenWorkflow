@@ -64,7 +64,9 @@ button { color: inherit; }
 .react-flow__pane { cursor: default; }
 .react-flow__edge-path { stroke: #727988; stroke-width: 1.5; }
 .react-flow__edge.animated path { stroke: #8f76c9; }
-.react-flow__handle { width: 8px; height: 8px; background: #0b0e14; border: 2px solid var(--node-accent); }
+.react-flow__handle { width: 32px; height: 32px; border: 0; background: transparent; cursor: crosshair; touch-action: none; }
+.react-flow__handle::after { content: ""; position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; transform: translate(-50%, -50%); border: 2px solid var(--node-accent); border-radius: 50%; background: #0b0e14; box-shadow: 0 0 0 2px rgba(8, 10, 15, .72); transition: width .12s, height .12s, background .12s, box-shadow .12s; }
+.react-flow__handle:hover::after, .react-flow__handle.connectingfrom::after, .react-flow__handle.connectingto::after { width: 15px; height: 15px; background: var(--node-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-accent) 24%, transparent); }
 .react-flow__controls { border: 1px solid var(--border); box-shadow: none; overflow: hidden; border-radius: 7px; }
 .react-flow__controls-button { background: #11141b; border-color: var(--border); fill: #9ba2af; }
 .react-flow__controls-button:hover { background: #1b2029; }
