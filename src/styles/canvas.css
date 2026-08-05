@@ -12,8 +12,10 @@
 }
 
 .react-flow__edge-path {
-  stroke: var(--ink-6);
-  stroke-width: 1.5;
+  stroke: var(--ink-8);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 5;
+  stroke-linecap: round;
 }
 
 .react-flow__edge.selected .react-flow__edge-path,
@@ -21,7 +23,7 @@
   stroke: var(--ink-8);
 }
 
-/* Generous invisible hit area, small visible dot. */
+/* Generous invisible hit area around the small, solid diagram port. */
 .react-flow__handle {
   width: 30px;
   height: 30px;
@@ -36,14 +38,15 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   transform: translate(-50%, -50%);
-  border: 1.5px solid var(--ink-6);
+  border: 2px solid var(--surface-raised);
   border-radius: 50%;
-  background: var(--ink-0);
+  background: var(--ink-8);
+  box-shadow: 0 0 0 1px var(--ink-5);
   transition: width var(--fast) var(--ease), height var(--fast) var(--ease),
-    background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+    background var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 
 .react-flow__handle:hover::after,
@@ -51,8 +54,8 @@
 .react-flow__handle.connectingto::after {
   width: 13px;
   height: 13px;
-  border-color: var(--ink-9);
-  background: var(--ink-9);
+  background: var(--ink-10);
+  box-shadow: 0 0 0 1px var(--ink-8);
 }
 
 .react-flow__controls {
@@ -87,23 +90,29 @@
 /* ---- Node card ----------------------------------------------------------- */
 
 .wf-node {
-  width: 244px;
-  padding: 11px 12px 9px;
-  border: 1px solid var(--border);
+  position: relative;
+  width: 206px;
+  border: 1px solid var(--ink-6);
   border-radius: var(--radius);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
-  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
-    transform var(--fast) var(--ease);
+  background: linear-gradient(180deg, var(--ink-3), var(--ink-2));
+  box-shadow: 0 7px 22px -12px rgb(0 0 0 / 0.9), inset 0 1px rgb(255 255 255 / 0.025);
+  transition: border-color var(--normal) var(--ease), background var(--normal) var(--ease),
+    box-shadow var(--normal) var(--ease), transform var(--normal) var(--ease);
 }
 
 .wf-node:hover {
-  border-color: var(--border-strong);
+  z-index: 2;
+  border-color: var(--ink-8);
+  background: linear-gradient(180deg, var(--ink-4), var(--ink-3));
+  box-shadow: 0 14px 34px -14px rgb(0 0 0 / 0.95), 0 0 0 1px var(--ink-6),
+    0 0 24px rgb(157 157 168 / 0.12), inset 0 1px rgb(255 255 255 / 0.06);
+  transform: translateY(-2px) scale(1.015);
 }
 
 .wf-node.is-selected {
-  border-color: var(--ink-7);
-  box-shadow: var(--shadow), 0 0 0 1px var(--ink-7);
+  border-color: var(--ink-9);
+  box-shadow: 0 10px 28px -14px rgb(0 0 0 / 0.95), 0 0 0 1px var(--ink-8),
+    0 0 28px rgb(157 157 168 / 0.12);
 }
 
 .wf-node.status-running {
@@ -132,70 +141,71 @@
 }
 
 .wf-node-head {
-  display: grid;
-  grid-template-columns: 30px 1fr;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
+  min-height: 31px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--ink-5);
+  background: rgb(255 255 255 / 0.018);
 }
 
 .wf-node-mark {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--ink-0);
-  color: var(--text-secondary);
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--ink-9);
 }
 
-.wf-node-copy {
+.wf-node-head strong {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.wf-node-copy strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.008em;
-  color: var(--text);
-}
-
-.wf-node-copy > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  line-height: 16px;
-  color: var(--text-muted);
+  font-weight: 600;
+  line-height: 15px;
+  color: var(--text);
+}
+
+.wf-node-body {
+  padding: 8px 9px 7px;
+}
+
+.wf-node-description {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-secondary);
 }
 
 .wf-node-foot {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 9px;
+  line-height: 12px;
 }
 
 .wf-node-kind {
-  color: var(--ink-6);
+  color: var(--ink-8);
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .wf-node-demo {
-  padding: 1px 5px;
+  padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 8px;
   font-weight: 500;
 }
 
@@ -206,6 +216,7 @@
   margin-left: auto;
   color: var(--text-secondary);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .wf-node-status.error {

@@ -55,7 +55,7 @@ export const WorkflowCanvas = memo(function WorkflowCanvas({
         onPaneClick={onPaneClick}
         deleteKeyCode={["Backspace", "Delete"]}
         fitView
-        fitViewOptions={{ padding: 0.26 }}
+        fitViewOptions={{ padding: 0.18, minZoom: 0.55 }}
         minZoom={0.35}
         maxZoom={1.6}
       >

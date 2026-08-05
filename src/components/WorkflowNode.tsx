@@ -31,33 +31,33 @@ export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode
 
       <div className="wf-node-head">
         <span className="wf-node-mark">
-          <NodeMark type={data.nodeType} size={17} />
+          <NodeMark type={data.nodeType} size={13} />
         </span>
-        <span className="wf-node-copy">
-          <strong>{data.label}</strong>
-          <span>{data.description}</span>
-        </span>
+        <strong>{data.label}</strong>
       </div>
 
-      <div className="wf-node-foot">
-        <span className="wf-node-kind">{item.category}</span>
-        {isDemo && <span className="wf-node-demo">Demo</span>}
-        {status !== "idle" && (
-          <span className={`wf-node-status ${status}`}>
-            <span
-              className={`dot ${
-                status === "running"
-                  ? "dot-running"
-                  : status === "waiting"
-                    ? "dot-waiting"
-                    : status === "error"
-                      ? "dot-failed"
-                      : "dot-done"
-              }`}
-            />
-            {STATUS_LABEL[status]}
-          </span>
-        )}
+      <div className="wf-node-body">
+        <span className="wf-node-description">{data.description}</span>
+        <div className="wf-node-foot">
+          <span className="wf-node-kind">{item.category}</span>
+          {isDemo && <span className="wf-node-demo">Demo</span>}
+          {status !== "idle" && (
+            <span className={`wf-node-status ${status}`}>
+              <span
+                className={`dot ${
+                  status === "running"
+                    ? "dot-running"
+                    : status === "waiting"
+                      ? "dot-waiting"
+                      : status === "error"
+                        ? "dot-failed"
+                        : "dot-done"
+                }`}
+              />
+              {STATUS_LABEL[status]}
+            </span>
+          )}
+        </div>
       </div>
 
       {!isOutput && !isCondition && (
