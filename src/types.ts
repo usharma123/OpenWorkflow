@@ -62,6 +62,7 @@ export interface RunStepSummary {
 
 export interface PendingApproval {
   runId?: string;
+  backendRunId?: import("../convex/_generated/dataModel").Id<"workflowRuns">;
   nodeId: string;
   title: string;
   prompt: string;

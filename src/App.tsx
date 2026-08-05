@@ -61,14 +61,20 @@ const GOOGLE_SCOPES = [
 const GOOGLE_CONNECTION_PENDING_KEY = "openworkflow.googleConnectionPending";
 
 function connectionError(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback;
-  const message = error.message;
-  if (message.includes("Slack OAuth is not configured by the administrator")) {
+  const data = error && typeof error === "object" && "data" in error
+    ? (error as { data?: unknown }).data
+    : undefined;
+  const code = data && typeof data === "object" && "code" in data
+    ? (data as { code?: unknown }).code
+    : undefined;
+  if (code === "CONNECTION_SLACK_NOT_CONFIGURED") {
     return "Slack OAuth is not configured yet. Ask an administrator to add the Slack app credentials and encryption key.";
   }
-  if (message.includes("Google") && (message.includes("scope") || message.includes("reauthor"))) {
+  if (code === "CONNECTION_GOOGLE_AUTHORIZATION_FAILED") {
     return "Google needs to be reauthorized with Gmail, Docs, and Drive access. Open Connectors and reconnect the account.";
   }
+  if (!(error instanceof Error)) return fallback;
+  const message = error.message;
   const serverMessage = message.match(/Uncaught Error:\s*([^\n]+)/)?.[1];
   return serverMessage ?? message;
 }
@@ -137,8 +143,12 @@ export default function App() {
     if ((integration === "google" && status === "connected") || (!integration && pendingGoogleConnection)) {
       setConnectionBusy("google");
       void convexClient.action(syncGoogleRef, {})
-        .then(refreshConnections)
-        .then(() => setNotice("Google Workspace connected"))
+        .then(async (result) => {
+          await refreshConnections();
+          setNotice(result.count > 0
+            ? "Google Workspace connected"
+            : "Google authorization did not return an account. Open Connectors and reconnect.");
+        })
         .catch((error) => setNotice(connectionError(error, "Google connection could not be synchronized")))
         .finally(() => {
           window.sessionStorage.removeItem(GOOGLE_CONNECTION_PENDING_KEY);
@@ -177,7 +187,7 @@ export default function App() {
     try {
       await convexClient.action(disconnectGoogleRef, { externalId });
       await refreshConnections();
-      setNotice("Google Workspace disconnected");
+      setNotice("Google disconnected from OpenWorkflow; your Clerk sign-in remains linked");
     } catch (error) {
       setNotice(connectionError(error, "Could not disconnect Google"));
     } finally {
@@ -332,11 +342,15 @@ export default function App() {
     setPendingApproval(undefined);
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
     try {
+      const currentConnections = convexClient
+        ? await convexClient.query(listConnectionsRef, {})
+        : connections;
+      if (convexClient) setConnections(currentConnections);
       const unready = nodes.find((node) => {
         const provider = node.data.nodeType === "slack" ? "slack" : ["gmailTrigger", "googleDoc"].includes(node.data.nodeType) ? "google" : undefined;
         if (!provider || node.data.config.executionMode !== "live") return false;
         const ref = String(node.data.config.connectionRef ?? "");
-        return !connections.some((connection) => connection.provider === provider && connection.externalId === ref && connection.status === "active");
+        return !currentConnections.some((connection) => connection.provider === provider && connection.externalId === ref && connection.status === "active");
       });
       if (unready) {
         setHubTab("connectors");
@@ -385,7 +399,7 @@ export default function App() {
               const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
               if (waiting) {
                 const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
-                setPendingApproval({ runId, nodeId: waiting.nodeId, title: waiting.nodeLabel, prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"), input: waiting.input });
+                setPendingApproval({ backendRunId: runId, nodeId: waiting.nodeId, title: waiting.nodeLabel, prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"), input: waiting.input });
               } else setPendingApproval(undefined);
               setNodes((current) =>
                 current.map((node) => {
@@ -447,8 +461,8 @@ export default function App() {
     if (!pendingApproval || approvalBusy) return;
     setApprovalBusy(true);
     try {
-      if (convexClient && pendingApproval.runId) {
-        await convexClient.mutation(approveRunRef, { runId: pendingApproval.runId, nodeId: pendingApproval.nodeId, approved, ...(note?.trim() ? { note: note.trim() } : {}) });
+      if (convexClient && pendingApproval.backendRunId) {
+        await convexClient.mutation(approveRunRef, { runId: pendingApproval.backendRunId, nodeId: pendingApproval.nodeId, approved, ...(note?.trim() ? { note: note.trim() } : {}) });
       } else if (demoApprovalResolver.current) {
         demoApprovalResolver.current({ approved, ...(note?.trim() ? { note: note.trim() } : {}) });
         demoApprovalResolver.current = undefined;

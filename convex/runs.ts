@@ -31,7 +31,7 @@ export const get = query({
 
 export const startRun = mutation({
   args: { externalWorkflowId: v.string(), input: v.any(), trigger: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<string> => {
+  handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
     const definition = await ctx.db
       .query("workflows")
