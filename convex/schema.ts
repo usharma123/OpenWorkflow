@@ -43,6 +43,7 @@ export default defineSchema({
     nodeId: v.string(),
     nodeLabel: v.string(),
     nodeType: v.string(),
+    connectionRef: v.optional(v.string()),
     status: v.union(
       v.literal("running"),
       v.literal("waiting"),
@@ -56,4 +57,37 @@ export default defineSchema({
     startedAt: v.number(),
     completedAt: v.optional(v.number()),
   }).index("by_run", ["runId"]),
+
+  connections: defineTable({
+    externalId: v.string(),
+    provider: v.union(
+      v.literal("google"),
+      v.literal("slack"),
+      v.literal("microsoft"),
+    ),
+    displayName: v.string(),
+    ownerLabel: v.string(),
+    scopes: v.array(v.string()),
+    status: v.union(v.literal("active"), v.literal("needs_reauth"), v.literal("disabled")),
+    secretLocator: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_external_id", ["externalId"])
+    .index("by_provider", ["provider"]),
+
+  auditLogs: defineTable({
+    runId: v.optional(v.id("workflowRuns")),
+    stepRunId: v.optional(v.id("stepRuns")),
+    event: v.string(),
+    provider: v.optional(v.string()),
+    connectionRef: v.optional(v.string()),
+    outcome: v.union(v.literal("started"), v.literal("succeeded"), v.literal("failed"), v.literal("approved"), v.literal("rejected")),
+    actor: v.string(),
+    detail: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_run", ["runId"])
+    .index("by_created_at", ["createdAt"]),
 });

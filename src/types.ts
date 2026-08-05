@@ -4,7 +4,10 @@ export type WorkflowNodeType =
   | "manualTrigger"
   | "webhookTrigger"
   | "scheduleTrigger"
+  | "gmailTrigger"
   | "ai"
+  | "googleDoc"
+  | "slack"
   | "http"
   | "condition"
   | "transform"
@@ -12,14 +15,14 @@ export type WorkflowNodeType =
   | "approval"
   | "output";
 
-export type NodeCategory = "Triggers" | "AI" | "Logic" | "Actions";
+export type NodeCategory = "Start" | "Think" | "Review" | "Deliver" | "Advanced";
 
 export interface WorkflowNodeData extends Record<string, unknown> {
   label: string;
   description: string;
   nodeType: WorkflowNodeType;
   config: Record<string, unknown>;
-  status?: "idle" | "running" | "success" | "error";
+  status?: "idle" | "running" | "waiting" | "success" | "error";
 }
 
 export type WorkflowNode = Node<WorkflowNodeData, "workflow">;
@@ -42,6 +45,27 @@ export interface RunLog {
   message: string;
   timestamp: number;
   output?: unknown;
+  explanation?: string;
+}
+
+export interface RunStepSummary {
+  id: string;
+  nodeId: string;
+  nodeLabel: string;
+  nodeType: string;
+  status: "running" | "waiting" | "completed" | "failed" | "skipped";
+  startedAt: number;
+  completedAt?: number;
+  output?: unknown;
+  error?: string;
+}
+
+export interface PendingApproval {
+  runId?: string;
+  nodeId: string;
+  title: string;
+  prompt: string;
+  input?: unknown;
 }
 
 export interface WorkflowRun {
@@ -59,6 +83,7 @@ export interface LatestRunResult {
   status: "queued" | "running" | "waiting" | "completed" | "failed";
   output?: unknown;
   error?: string;
+  steps?: RunStepSummary[];
 }
 
 export interface NodeCatalogItem {
@@ -68,4 +93,6 @@ export interface NodeCatalogItem {
   category: NodeCategory;
   accent: string;
   defaultConfig: Record<string, unknown>;
+  outcome: string;
+  setup?: "none" | "connection";
 }

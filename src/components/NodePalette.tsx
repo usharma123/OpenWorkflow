@@ -1,16 +1,17 @@
-import { ChevronRight, GripVertical, Search } from "lucide-react";
+import { ChevronRight, GripVertical, LayoutTemplate, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NODE_CATALOG } from "../catalog";
 import type { NodeCategory, WorkflowNodeType } from "../types";
 import { NODE_ICONS } from "./icons";
 
-const categories: NodeCategory[] = ["Triggers", "AI", "Logic", "Actions"];
+const categories: NodeCategory[] = ["Start", "Think", "Review", "Deliver", "Advanced"];
 
 interface NodePaletteProps {
   onAdd: (type: WorkflowNodeType) => void;
+  onOpenLibrary: () => void;
 }
 
-export function NodePalette({ onAdd }: NodePaletteProps) {
+export function NodePalette({ onAdd, onOpenLibrary }: NodePaletteProps) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
   const filtered = useMemo(
@@ -32,12 +33,17 @@ export function NodePalette({ onAdd }: NodePaletteProps) {
   return (
     <aside className="palette panel">
       <div className="panel-heading">
-        <span>Blocks</span>
+        <span>Steps</span>
         <small>{NODE_CATALOG.length}</small>
       </div>
+      <button className="template-launch" onClick={onOpenLibrary}>
+        <LayoutTemplate size={15} />
+        <span><strong>Start from a template</strong><small>Use a proven business workflow</small></span>
+        <ChevronRight size={14} />
+      </button>
       <label className="search-box">
         <Search size={15} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a block" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a step" />
       </label>
       <div className="palette-scroll">
         {categories.map((category) => {
@@ -75,8 +81,8 @@ export function NodePalette({ onAdd }: NodePaletteProps) {
         })}
       </div>
       <div className="palette-foot">
-        <span className="safe-dot" /> Fixed blocks only
-        <small>No arbitrary code</small>
+        <span className="safe-dot" /> Guardrails are on
+        <small>Credentials stay server-side</small>
       </div>
     </aside>
   );

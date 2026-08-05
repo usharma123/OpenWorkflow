@@ -1,7 +1,7 @@
 import { STARTER_WORKFLOW } from "../catalog";
 import type { WorkflowDefinition } from "../types";
 
-const STORAGE_KEY = "openworkflow:workflow";
+const STORAGE_KEY = "openworkflow:workflow:business-v2";
 
 export function loadWorkflow(): WorkflowDefinition {
   try {

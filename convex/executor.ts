@@ -12,6 +12,27 @@ type WorkflowNode = {
 };
 type WorkflowEdge = { source: string; target: string; sourceHandle?: string | null };
 
+const connectorProviders: Record<string, string> = {
+  gmailTrigger: "gmail",
+  googleDoc: "google-docs",
+  slack: "slack",
+};
+
+function runRecordValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.messages)) return value;
+  return {
+    ...record,
+    messages: record.messages.map((message) => {
+      if (!message || typeof message !== "object") return message;
+      const { snippet: _snippet, body: _body, ...metadata } = message as Record<string, unknown>;
+      return metadata;
+    }),
+    contentRedacted: true,
+  };
+}
+
 function topologicalSort(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
   const indegree = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
@@ -84,33 +105,50 @@ export const startStep = internalMutation({
     nodeId: v.string(),
     nodeLabel: v.string(),
     nodeType: v.string(),
+    connectionRef: v.optional(v.string()),
     input: v.any(),
     waiting: v.boolean(),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.runId, { status: args.waiting ? "waiting" : "running" });
-    return ctx.db.insert("stepRuns", {
+    const stepRunId = await ctx.db.insert("stepRuns", {
       runId: args.runId,
       nodeId: args.nodeId,
       nodeLabel: args.nodeLabel,
       nodeType: args.nodeType,
-      input: args.input,
+      connectionRef: args.connectionRef,
+      input: runRecordValue(args.input),
       status: args.waiting ? "waiting" : "running",
       startedAt: Date.now(),
     });
+    const provider = connectorProviders[args.nodeType];
+    if (provider) {
+      await ctx.db.insert("auditLogs", { runId: args.runId, stepRunId, event: "connector.use", provider, connectionRef: args.connectionRef, outcome: "started", actor: "workflow-engine", createdAt: Date.now() });
+      if (args.connectionRef) {
+        const connection = await ctx.db.query("connections").withIndex("by_external_id", (q) => q.eq("externalId", args.connectionRef!)).unique();
+        if (connection) await ctx.db.patch(connection._id, { lastUsedAt: Date.now() });
+      }
+    }
+    return stepRunId;
   },
 });
 
 export const finishStep = internalMutation({
   args: { stepRunId: v.id("stepRuns"), output: v.any() },
-  handler: async (ctx, { stepRunId, output }) =>
-    ctx.db.patch(stepRunId, { status: "completed", output, completedAt: Date.now() }),
+  handler: async (ctx, { stepRunId, output }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    await ctx.db.patch(stepRunId, { status: "completed", output: runRecordValue(output), completedAt: Date.now() });
+    if (stepRun && connectorProviders[stepRun.nodeType]) await ctx.db.insert("auditLogs", { runId: stepRun.runId, stepRunId, event: "connector.use", provider: connectorProviders[stepRun.nodeType], connectionRef: stepRun.connectionRef, outcome: "succeeded", actor: "workflow-engine", createdAt: Date.now() });
+  },
 });
 
 export const failStep = internalMutation({
   args: { stepRunId: v.id("stepRuns"), error: v.string() },
-  handler: async (ctx, { stepRunId, error }) =>
-    ctx.db.patch(stepRunId, { status: "failed", error, completedAt: Date.now() }),
+  handler: async (ctx, { stepRunId, error }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    await ctx.db.patch(stepRunId, { status: "failed", error, completedAt: Date.now() });
+    if (stepRun && connectorProviders[stepRun.nodeType]) await ctx.db.insert("auditLogs", { runId: stepRun.runId, stepRunId, event: "connector.use", provider: connectorProviders[stepRun.nodeType], connectionRef: stepRun.connectionRef, outcome: "failed", actor: "workflow-engine", detail: error.slice(0, 300), createdAt: Date.now() });
+  },
 });
 
 export const skipStep = internalMutation({
@@ -130,7 +168,7 @@ export const skipStep = internalMutation({
 export const completeRun = internalMutation({
   args: { runId: v.id("workflowRuns"), output: v.any() },
   handler: async (ctx, { runId, output }) =>
-    ctx.db.patch(runId, { status: "completed", output, completedAt: Date.now() }),
+    ctx.db.patch(runId, { status: "completed", output: runRecordValue(output), completedAt: Date.now() }),
 });
 
 export const failRun = internalMutation({
@@ -144,6 +182,40 @@ export const executeNode = internalAction({
   handler: async (_ctx, { node, input }): Promise<unknown> => {
     const typedNode = node as WorkflowNode;
     const { nodeType, config } = typedNode.data;
+
+    const executionMode = String(config.executionMode ?? "demo");
+    const connectionRef = String(config.connectionRef ?? "");
+
+    if (nodeType === "gmailTrigger") {
+      if (executionMode === "demo") {
+        return {
+          messages: [
+            { from: "Maya Chen · Finance", subject: "Q3 forecast needs sign-off", snippet: "Please approve the revised hiring assumptions before Thursday." },
+            { from: "Jordan Lee · Product", subject: "Launch readiness update", snippet: "The beta is on track; legal review is the only remaining dependency." },
+            { from: "Sam Rivera · Customer Success", subject: "Acme renewal risk", snippet: "Acme asked for an executive sponsor before next week's renewal call." },
+          ],
+          count: 3,
+          date: new Date().toLocaleDateString("en-US"),
+          source: "sample",
+        };
+      }
+      const expectedRef = process.env.GOOGLE_WORKSPACE_CONNECTION_REF ?? "google-workspace-poc";
+      const accessToken = process.env.GOOGLE_WORKSPACE_ACCESS_TOKEN;
+      if (!connectionRef || connectionRef !== expectedRef || !accessToken) throw new Error("Google Workspace is not connected. Choose Safe demo, or configure the approved server-side Google connection.");
+      const maxResults = Math.min(25, Math.max(1, Number(config.maxMessages ?? 5)));
+      const query = encodeURIComponent(String(config.search ?? "is:unread newer_than:1d"));
+      const listResponse = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=${maxResults}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!listResponse.ok) throw new Error(`Gmail could not read the approved inbox (${listResponse.status}). Reconnect Google Workspace and try again.`);
+      const list = await listResponse.json() as { messages?: Array<{ id: string }> };
+      const messages = await Promise.all((list.messages ?? []).map(async ({ id }) => {
+        const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!response.ok) throw new Error(`Gmail could not read message metadata (${response.status}).`);
+        const message = await response.json() as { snippet?: string; payload?: { headers?: Array<{ name: string; value: string }> } };
+        const headers = Object.fromEntries((message.payload?.headers ?? []).map((header) => [header.name.toLowerCase(), header.value]));
+        return { from: headers.from ?? "Unknown sender", subject: headers.subject ?? "(No subject)", receivedAt: headers.date, snippet: message.snippet ?? "" };
+      }));
+      return { messages, count: messages.length, date: new Date().toLocaleDateString("en-US"), source: "gmail" };
+    }
 
     if (nodeType.endsWith("Trigger") || nodeType === "output") return input;
 
@@ -227,7 +299,36 @@ export const executeNode = internalAction({
       };
       if (!response.ok) throw new Error(payload.error?.message ?? `OpenRouter request failed (${response.status}).`);
       const message = payload.choices?.[0]?.message;
-      return { content: message?.content ?? "", citations: message?.annotations ?? [], usage: payload.usage };
+      return { ...(input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}), content: message?.content ?? "", citations: message?.annotations ?? [], usage: payload.usage };
+    }
+
+    if (nodeType === "googleDoc") {
+      const content = typeof input === "object" && input && typeof (input as Record<string, unknown>).content === "string" ? String((input as Record<string, unknown>).content) : JSON.stringify(input, null, 2);
+      const title = renderTemplate(String(config.title ?? "OpenWorkflow brief"), input);
+      if (executionMode === "demo") return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), documentTitle: title, documentUrl: "https://docs.google.com/document/d/demo-openworkflow-inbox-brief/edit", documentMode: "demo" };
+      const expectedRef = process.env.GOOGLE_WORKSPACE_CONNECTION_REF ?? "google-workspace-poc";
+      const accessToken = process.env.GOOGLE_WORKSPACE_ACCESS_TOKEN;
+      if (!connectionRef || connectionRef !== expectedRef || !accessToken) throw new Error("Google Docs is not connected. Choose Safe demo, or configure the approved server-side Google connection.");
+      const createResponse = await fetch("https://docs.googleapis.com/v1/documents", { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ title }) });
+      const document = await createResponse.json() as { documentId?: string; error?: { message?: string } };
+      if (!createResponse.ok || !document.documentId) throw new Error(document.error?.message ?? `Google Docs could not create the document (${createResponse.status}).`);
+      const updateResponse = await fetch(`https://docs.googleapis.com/v1/documents/${document.documentId}:batchUpdate`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: content } }] }) });
+      if (!updateResponse.ok) throw new Error(`Google Docs created the file but could not add the brief (${updateResponse.status}).`);
+      return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), documentTitle: title, documentUrl: `https://docs.google.com/document/d/${document.documentId}/edit`, documentMode: "live" };
+    }
+
+    if (nodeType === "slack") {
+      const configuredChannel = String(config.channel ?? "#leadership-updates");
+      const channel = executionMode === "live" ? process.env.SLACK_CHANNEL_ID ?? configuredChannel : configuredChannel;
+      const message = renderTemplate(String(config.message ?? "{{input.documentUrl}}"), input);
+      if (executionMode === "demo") return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), delivery: { provider: "slack", channel, message, status: "simulated" } };
+      const expectedRef = process.env.SLACK_CONNECTION_REF ?? "slack-poc";
+      const accessToken = process.env.SLACK_BOT_TOKEN;
+      if (!connectionRef || connectionRef !== expectedRef || !accessToken) throw new Error("Slack is not connected. Choose Safe demo, or configure the approved server-side Slack connection.");
+      const response = await fetch("https://slack.com/api/chat.postMessage", { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify({ channel, text: message, unfurl_links: false }) });
+      const payload = await response.json() as { ok?: boolean; error?: string; ts?: string; channel?: string };
+      if (!response.ok || !payload.ok) throw new Error(`Slack could not post the approved link: ${payload.error ?? response.status}.`);
+      return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), delivery: { provider: "slack", channel: payload.channel ?? channel, message, status: "sent", messageId: payload.ts } };
     }
 
     throw new Error(`Unsupported workflow block: ${nodeType}`);
@@ -263,6 +364,7 @@ export const executeWorkflow = workflow
           nodeId: node.id,
           nodeLabel: node.data.label,
           nodeType: node.data.nodeType,
+          connectionRef: typeof node.data.config.connectionRef === "string" ? node.data.config.connectionRef : undefined,
           input: value,
           waiting: isApproval,
         });
@@ -277,7 +379,7 @@ export const executeWorkflow = workflow
             validator: v.object({ approved: v.boolean(), note: v.optional(v.string()) }),
           });
           if (!approval.approved) throw new Error(approval.note || "Workflow was rejected.");
-          value = approval;
+          value = { ...(value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : { value }), approval: { ...approval, decidedAt: Date.now() } };
         } else {
           value = await step.runAction(
             internal.executor.executeNode,

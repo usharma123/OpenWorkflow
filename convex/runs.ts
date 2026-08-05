@@ -71,5 +71,14 @@ export const approve = mutation({
       value: { approved: args.approved, note: args.note },
       validator: v.object({ approved: v.boolean(), note: v.optional(v.string()) }),
     });
+    await ctx.db.insert("auditLogs", {
+      runId: args.runId,
+      event: "approval.decision",
+      outcome: args.approved ? "approved" : "rejected",
+      actor: "editor-user",
+      detail: args.note?.slice(0, 300),
+      createdAt: Date.now(),
+    });
+    return null;
   },
 });

@@ -14,7 +14,9 @@ import {
   Check,
   ChevronDown,
   Cloud,
+  HelpCircle,
   History,
+  PlugZap,
   Play,
   Redo2,
   RotateCcw,
@@ -28,10 +30,12 @@ import { catalogByType } from "./catalog";
 import { Inspector } from "./components/Inspector";
 import { NodePalette } from "./components/NodePalette";
 import { OutputPanel } from "./components/OutputPanel";
+import { ResourceHub, type HubTab } from "./components/ResourceHub";
 import { RunPanel } from "./components/RunPanel";
 import { WorkflowNodeComponent } from "./components/WorkflowNode";
 import {
   convexClient,
+  approveRunRef,
   getRunRef,
   getWorkflowRef,
   startRunRef,
@@ -39,7 +43,7 @@ import {
 } from "./lib/convexClient";
 import { runDemo } from "./lib/demoRunner";
 import { loadWorkflow, resetWorkflow, saveWorkflow } from "./lib/storage";
-import type { LatestRunResult, RunLog, WorkflowNode, WorkflowNodeType } from "./types";
+import type { LatestRunResult, PendingApproval, RunLog, WorkflowNode, WorkflowNodeType } from "./types";
 
 const nodeTypes = { workflow: WorkflowNodeComponent };
 
@@ -68,10 +72,14 @@ export default function App() {
   const [runPanelOpen, setRunPanelOpen] = useState(false);
   const [latestResult, setLatestResult] = useState<LatestRunResult>();
   const [notice, setNotice] = useState<string>();
+  const [hubTab, setHubTab] = useState<HubTab>();
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval>();
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [backendLoaded, setBackendLoaded] = useState(!convexClient);
   const reactFlow = useReactFlow<WorkflowNode>();
   const saveTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
+  const demoApprovalResolver = useRef<((decision: { approved: boolean; note?: string }) => void) | undefined>(undefined);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
 
@@ -193,6 +201,7 @@ export default function App() {
     setRunPanelOpen(true);
     setSelectedNodeId(undefined);
     setLatestResult({ status: "queued" });
+    setPendingApproval(undefined);
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
     try {
       if (convexClient) {
@@ -209,7 +218,7 @@ export default function App() {
         });
         const runId = await client.mutation(startRunRef, {
           externalWorkflowId: initial.id,
-          input: { topic: "OpenWorkflow proof of concept" },
+          input: { requestedBy: "Editor user", date: new Date().toLocaleDateString() },
           trigger: "manual",
         });
         setLatestResult({ id: runId, status: "queued" });
@@ -222,22 +231,28 @@ export default function App() {
             try {
               const run = watch.localQueryResult();
               if (!run) return;
-              setLatestResult({ id: runId, status: run.status, output: run.output, error: run.error });
+              setLatestResult({ id: runId, status: run.status, output: run.output, error: run.error, steps: run.steps.map((step) => ({ id: step._id, ...step })) });
               setLogs([
                 { id: `started-${runId}`, level: "info", message: `Run ${run.status}.`, timestamp: run.startedAt },
                 ...run.steps.map((step) => ({
                   id: step._id,
                   nodeId: step.nodeId,
                   level: step.status === "failed" ? "error" as const : step.status === "completed" ? "success" as const : "info" as const,
-                  message: `${step.nodeLabel}: ${step.status}`,
+                  message: step.status === "waiting" ? `${step.nodeLabel} needs a decision` : `${step.nodeLabel} ${step.status}`,
                   timestamp: step.completedAt ?? step.startedAt,
                   output: step.output,
+                  explanation: step.error ?? (step.status === "waiting" ? "Review the generated document, then approve or reject below." : step.status === "completed" ? "This result is recorded in the run history." : "OpenWorkflow is working on this step."),
                 })),
               ]);
+              const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
+              if (waiting) {
+                const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
+                setPendingApproval({ runId, nodeId: waiting.nodeId, title: waiting.nodeLabel, prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"), input: waiting.input });
+              } else setPendingApproval(undefined);
               setNodes((current) =>
                 current.map((node) => {
                   const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
-                  const status = latest?.status === "completed" ? "success" : latest?.status === "failed" ? "error" : latest ? "running" : "idle";
+                  const status = latest?.status === "completed" ? "success" : latest?.status === "failed" ? "error" : latest?.status === "waiting" ? "waiting" : latest ? "running" : "idle";
                   return { ...node, data: { ...node.data, status } };
                 }),
               );
@@ -260,6 +275,10 @@ export default function App() {
             setNodes((current) =>
               current.map((node) => (node.id === nodeId ? { ...node, data: { ...node.data, status } } : node)),
           ),
+          (request) => new Promise((resolve) => {
+            demoApprovalResolver.current = resolve;
+            setPendingApproval(request);
+          }),
         );
         setLatestResult({ id: demoRun.id, status: demoRun.status, output: demoRun.output, error: demoRun.error });
       }
@@ -280,6 +299,28 @@ export default function App() {
       ]);
     } finally {
       setRunning(false);
+      setPendingApproval(undefined);
+      demoApprovalResolver.current = undefined;
+    }
+  };
+
+  const decideApproval = async (approved: boolean, note?: string) => {
+    if (!pendingApproval || approvalBusy) return;
+    setApprovalBusy(true);
+    try {
+      if (convexClient && pendingApproval.runId) {
+        await convexClient.mutation(approveRunRef, { runId: pendingApproval.runId, nodeId: pendingApproval.nodeId, approved, ...(note?.trim() ? { note: note.trim() } : {}) });
+      } else if (demoApprovalResolver.current) {
+        demoApprovalResolver.current({ approved, ...(note?.trim() ? { note: note.trim() } : {}) });
+        demoApprovalResolver.current = undefined;
+      }
+      setPendingApproval(undefined);
+      setNotice(approved ? "Approved — the workflow is continuing" : "Rejected — the run will stop safely");
+      window.setTimeout(() => setNotice(undefined), 2400);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not record the decision");
+    } finally {
+      setApprovalBusy(false);
     }
   };
 
@@ -293,6 +334,12 @@ export default function App() {
     setLogs([]);
     setNotice("Starter workflow restored");
     window.setTimeout(() => setNotice(undefined), 2200);
+  };
+
+  const useInboxTemplate = () => {
+    restoreStarter();
+    setHubTab(undefined);
+    setNotice("Daily inbox brief template loaded");
   };
 
   return (
@@ -313,6 +360,8 @@ export default function App() {
             <button className="icon-button" disabled title="Redo"><Redo2 size={16} /></button>
           </div>
           <button className="quiet-button" onClick={() => setRunPanelOpen(true)}><History size={15} /> Runs</button>
+          <button className="quiet-button" onClick={() => setHubTab("connectors")}><PlugZap size={15} /> Connectors</button>
+          <button className="icon-button help-button" onClick={() => setHubTab("help")} title="Help"><HelpCircle size={17} /></button>
           <label className="enable-control">
             <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
             <span>{enabled ? "Active" : "Draft"}</span>
@@ -322,7 +371,7 @@ export default function App() {
       </header>
 
       <div className="workspace">
-        <NodePalette onAdd={addNode} />
+        <NodePalette onAdd={addNode} onOpenLibrary={() => setHubTab("templates")} />
         <section className="canvas-wrap" onDrop={onDrop} onDragOver={(event) => event.preventDefault()}>
           <ReactFlow
             nodes={nodes}
@@ -350,8 +399,8 @@ export default function App() {
               {convexClient ? "Convex connected" : "Local demo mode"}
             </div>
           </ReactFlow>
-          <div className="canvas-hint"><Sparkles size={14} /> Drag blocks onto the canvas and connect them</div>
-          {runPanelOpen && <RunPanel logs={logs} running={running} onClose={() => setRunPanelOpen(false)} />}
+          <div className="canvas-hint"><Sparkles size={14} /> Each step receives the result from the step before it</div>
+          {runPanelOpen && <RunPanel logs={logs} running={running} pendingApproval={pendingApproval} approvalBusy={approvalBusy} onApproval={(approved, note) => void decideApproval(approved, note)} onClose={() => setRunPanelOpen(false)} />}
         </section>
         {selectedNode ? (
           <Inspector
@@ -366,13 +415,14 @@ export default function App() {
         ) : (
           <aside className="empty-inspector panel">
             <div className="empty-symbol"><Workflow size={25} /></div>
-            <strong>Select a block</strong>
-            <p>Choose a block on the canvas to configure its inputs and behavior.</p>
+            <strong>Select a step</strong>
+            <p>Choose a card to see what it accomplishes and set it up in plain language.</p>
             <button onClick={restoreStarter}><RotateCcw size={14} /> Restore starter</button>
           </aside>
         )}
       </div>
       {notice && <div className="toast"><Check size={15} /> {notice}</div>}
+      {hubTab && <ResourceHub initialTab={hubTab} onClose={() => setHubTab(undefined)} onUseInboxTemplate={useInboxTemplate} />}
     </main>
   );
 }

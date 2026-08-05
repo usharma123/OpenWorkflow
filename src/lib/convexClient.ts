@@ -20,6 +20,7 @@ export interface StoredStepRun {
   status: "running" | "waiting" | "completed" | "failed" | "skipped";
   startedAt: number;
   completedAt?: number;
+  input?: unknown;
   output?: unknown;
   error?: string;
 }
@@ -61,3 +62,9 @@ export const startRunRef = makeFunctionReference<
 >("runs:startRun");
 
 export const getRunRef = makeFunctionReference<"query", { runId: string }, StoredRun | null>("runs:get");
+
+export const approveRunRef = makeFunctionReference<
+  "mutation",
+  { runId: string; nodeId: string; approved: boolean; note?: string },
+  null
+>("runs:approve");
