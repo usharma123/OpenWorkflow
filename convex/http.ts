@@ -16,7 +16,7 @@ http.route({
       code: url.searchParams.get("code") ?? undefined,
       error: url.searchParams.get("error") ?? undefined,
     });
-    return Response.redirect(redirect, 302);
+    return new Response(null, { status: 302, headers: { Location: redirect } });
   }),
 });
 
@@ -25,10 +25,10 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const slug = new URL(request.url).pathname.replace(/^\/webhooks\//, "");
-    const workflow = await ctx.runQuery(internal.webhooks.resolve, { slug });
-    if (!workflow) return Response.json({ error: "Active webhook workflow not found." }, { status: 404 });
     const provided = request.headers.get("x-openworkflow-secret");
-    if (!provided || provided !== workflow.webhookSecret) return Response.json({ error: "Unauthorized." }, { status: 401 });
+    if (!provided) return Response.json({ error: "Unauthorized." }, { status: 401 });
+    const workflow = await ctx.runQuery(internal.webhooks.resolve, { slug, secret: provided });
+    if (!workflow) return Response.json({ error: "Active webhook workflow not found." }, { status: 404 });
     let input: unknown = {};
     try { input = await request.json(); } catch { input = {}; }
     const runId = await ctx.runMutation(internal.runs.startForWebhook, { workflowId: workflow._id, input });
