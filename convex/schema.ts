@@ -13,12 +13,14 @@ export default defineSchema({
     enabled: v.boolean(),
     nodes: v.array(v.any()),
     edges: v.array(v.any()),
+    webhookSlug: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
     lastScheduleMinuteByNode: v.optional(v.any()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_owner_external_id", ["ownerKey", "externalId"])
+    .index("by_webhook_slug_secret", ["webhookSlug", "webhookSecret"])
     .index("by_enabled", ["enabled"]),
 
   workflowRuns: defineTable({
@@ -41,7 +43,8 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index("by_workflow", ["workflowId"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_owner_started_at", ["ownerKey", "startedAt"]),
 
   stepRuns: defineTable({
     ownerKey: v.optional(v.string()),
@@ -65,8 +68,10 @@ export default defineSchema({
   }).index("by_run", ["runId"]),
 
   connections: defineTable({
-    ownerKey: v.string(),
-    clerkUserId: v.string(),
+    // Transitional optionals allow deployment over pre-auth POC rows. The
+    // scheduled legacy cleanup removes rows that cannot be owner-isolated.
+    ownerKey: v.optional(v.string()),
+    clerkUserId: v.optional(v.string()),
     organizationId: v.optional(v.string()),
     externalId: v.string(),
     provider: v.union(
@@ -76,7 +81,7 @@ export default defineSchema({
     ),
     displayName: v.string(),
     ownerLabel: v.string(),
-    externalAccountId: v.string(),
+    externalAccountId: v.optional(v.string()),
     scopes: v.array(v.string()),
     status: v.union(v.literal("active"), v.literal("needs_reauth"), v.literal("disabled")),
     secretCiphertext: v.optional(v.string()),
@@ -85,6 +90,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     lastUsedAt: v.optional(v.number()),
+    secretLocator: v.optional(v.string()),
   })
     .index("by_owner_external_id", ["ownerKey", "externalId"])
     .index("by_owner_provider", ["ownerKey", "provider"]),
@@ -98,7 +104,9 @@ export default defineSchema({
     returnUrl: v.string(),
     expiresAt: v.number(),
     createdAt: v.number(),
-  }).index("by_state_hash", ["stateHash"]),
+  })
+    .index("by_state_hash", ["stateHash"])
+    .index("by_expires_at", ["expiresAt"]),
 
   auditLogs: defineTable({
     ownerKey: v.optional(v.string()),
@@ -114,5 +122,6 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_run", ["runId"])
-    .index("by_created_at", ["createdAt"]),
+    .index("by_created_at", ["createdAt"])
+    .index("by_owner_created_at", ["ownerKey", "createdAt"]),
 });

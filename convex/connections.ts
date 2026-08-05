@@ -1,20 +1,27 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { requirePrincipal } from "./auth";
 
 const provider = v.union(v.literal("google"), v.literal("slack"), v.literal("microsoft"));
 const status = v.union(v.literal("active"), v.literal("needs_reauth"), v.literal("disabled"));
 
-function publicConnection(connection: Record<string, unknown>) {
-  const {
-    secretCiphertext: _secretCiphertext,
-    secretIv: _secretIv,
-    secretVersion: _secretVersion,
-    clerkUserId: _clerkUserId,
-    ownerKey: _ownerKey,
-    ...metadata
-  } = connection;
-  return metadata;
+function publicConnection(connection: Doc<"connections">) {
+  if (!connection.ownerKey || !connection.clerkUserId || !connection.externalAccountId) return null;
+  return {
+    _id: connection._id,
+    _creationTime: connection._creationTime,
+    externalId: connection.externalId,
+    provider: connection.provider,
+    displayName: connection.displayName,
+    ownerLabel: connection.ownerLabel,
+    externalAccountId: connection.externalAccountId,
+    scopes: connection.scopes,
+    status: connection.status,
+    createdAt: connection.createdAt,
+    updatedAt: connection.updatedAt,
+    lastUsedAt: connection.lastUsedAt,
+  };
 }
 
 export const list = query({
@@ -27,7 +34,8 @@ export const list = query({
       .collect();
     return connections
       .filter((connection) => connection.provider !== "google" || connection.clerkUserId === principal.userId)
-      .map((connection) => publicConnection(connection));
+      .map((connection) => publicConnection(connection))
+      .filter((connection) => connection !== null);
   },
 });
 export const auditForRun = query({
@@ -177,5 +185,34 @@ export const consumeOauthState = internalMutation({
     await ctx.db.delete(state._id);
     if (state.expiresAt < Date.now()) return null;
     return state;
+  },
+});
+
+export const cleanupExpiredOauthStates = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const expired = await ctx.db
+      .query("oauthStates")
+      .withIndex("by_expires_at", (q) => q.lt("expiresAt", Date.now()))
+      .collect();
+    for (const state of expired) await ctx.db.delete(state._id);
+    return expired.length;
+  },
+});
+
+export const cleanupLegacyConnections = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const connections = await ctx.db.query("connections").collect();
+    let removed = 0;
+    for (const connection of connections) {
+      if (!connection.ownerKey || !connection.clerkUserId || !connection.externalAccountId) {
+        await ctx.db.delete(connection._id);
+        removed += 1;
+      } else if (connection.secretLocator !== undefined) {
+        await ctx.db.patch(connection._id, { secretLocator: undefined });
+      }
+    }
+    return removed;
   },
 });
