@@ -1,7 +1,7 @@
 "use node";
 
 import { createClerkClient } from "@clerk/backend";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { action, internalAction } from "./_generated/server";
 import { requirePrincipal } from "./auth";
@@ -14,6 +14,8 @@ const GOOGLE_REQUIRED_SCOPES = [
   "https://www.googleapis.com/auth/documents",
   "https://www.googleapis.com/auth/drive.file",
 ];
+
+const connectionFailure = (code: string, message: string) => new ConvexError({ code, message });
 
 function clerkClient() {
   const secretKey = process.env.CLERK_SECRET_KEY;
@@ -44,7 +46,15 @@ export const syncGoogle = action({
   args: {},
   handler: async (ctx) => {
     const principal = await requirePrincipal(ctx);
-    const response = await clerkClient().users.getUserOauthAccessToken(principal.userId, GOOGLE_PROVIDER);
+    let response;
+    try {
+      response = await clerkClient().users.getUserOauthAccessToken(principal.userId, GOOGLE_PROVIDER);
+    } catch {
+      throw connectionFailure(
+        "CONNECTION_GOOGLE_AUTHORIZATION_FAILED",
+        "Google authorization could not be loaded. Reauthorize Google Workspace and try again.",
+      );
+    }
     const tokens = response.data;
     for (const token of tokens) {
       const scopes = token.scopes ?? [];
@@ -75,16 +85,15 @@ export const disconnectGoogle = action({
     if (!connection || connection.provider !== "google" || connection.clerkUserId !== principal.userId) {
       throw new Error("Google connection not found.");
     }
-    await clerkClient().users.deleteUserExternalAccount({
-      userId: principal.userId,
-      externalAccountId: connection.externalAccountId,
-    });
+    // Disabling the connector must not delete the Clerk external account: it
+    // may be the user's only sign-in identity. Reauthorization can reactivate
+    // this local connector without risking account lockout.
     await ctx.runMutation(internal.connections.setStatus, {
       ownerKey: principal.ownerKey,
       externalId,
       status: "disabled",
     });
-    return null;
+    return { identityPreserved: true };
   },
 });
 
@@ -94,7 +103,12 @@ export const startSlackOAuth = action({
     const principal = await requirePrincipal(ctx);
     const clientId = process.env.SLACK_CLIENT_ID;
     const redirectUri = process.env.SLACK_OAUTH_REDIRECT_URI;
-    if (!clientId || !redirectUri) throw new Error("Slack OAuth is not configured by the administrator.");
+    if (!clientId || !redirectUri) {
+      throw connectionFailure(
+        "CONNECTION_SLACK_NOT_CONFIGURED",
+        "Slack OAuth is not configured by the administrator.",
+      );
+    }
     const state = randomState();
     const safeUrl = safeReturnUrl(returnUrl);
     await ctx.runMutation(internal.connections.storeOauthState, {
@@ -118,8 +132,12 @@ export const finishSlackOAuth = internalAction({
   args: { state: v.string(), code: v.optional(v.string()), error: v.optional(v.string()) },
   handler: async (ctx, args): Promise<string> => {
     const state = await ctx.runMutation(internal.connections.consumeOauthState, { stateHash: hashValue(args.state) });
-    const fallback = process.env.APP_URL ?? "/";
-    if (!state) return callbackUrl(fallback, "error", "OAuth state expired or was already used.");
+    const fallback = process.env.APP_URL;
+    if (!state) {
+      return fallback
+        ? callbackUrl(fallback, "error", "OAuth state expired or was already used.")
+        : `/?integration=slack&status=error&detail=${encodeURIComponent("OAuth state expired or was already used.")}`;
+    }
     if (args.error || !args.code) return callbackUrl(state.returnUrl, "denied", args.error ?? "Authorization was not completed.");
 
     const clientId = process.env.SLACK_CLIENT_ID;
@@ -132,6 +150,7 @@ export const finishSlackOAuth = internalAction({
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code: args.code, redirect_uri: redirectUri }),
+      signal: AbortSignal.timeout(10_000),
     });
     const payload = (await response.json()) as {
       ok?: boolean;
@@ -178,6 +197,7 @@ export const disconnectSlack = action({
         const response = await fetch("https://slack.com/api/auth.revoke", {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(10_000),
         });
         const payload = (await response.json()) as { ok?: boolean };
         revoked = response.ok && Boolean(payload.ok);
