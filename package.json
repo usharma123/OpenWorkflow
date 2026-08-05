@@ -9,10 +9,13 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
+    "test": "bun test",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy"
   },
   "dependencies": {
+    "@clerk/backend": "^3.15.1",
+    "@clerk/react": "^6.12.11",
     "@convex-dev/workflow": "^0.4.4",
     "@xyflow/react": "^12.11.2",
     "convex": "^1.43.0",

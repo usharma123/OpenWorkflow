@@ -69,6 +69,7 @@ export const dispatch = internalMutation({
     let dispatched = 0;
 
     for (const definition of definitions) {
+      if (!definition.ownerKey || !definition.ownerUserId) continue;
       const nodes = definition.nodes as ScheduleNode[];
       const schedules = nodes.filter((node) => node?.data?.nodeType === "scheduleTrigger");
       const lastFired = (definition.lastScheduleMinuteByNode ?? {}) as Record<string, string>;
@@ -88,6 +89,8 @@ export const dispatch = internalMutation({
 
         const runId = await ctx.db.insert("workflowRuns", {
           workflowId: definition._id,
+          ownerKey: definition.ownerKey,
+          ownerUserId: definition.ownerUserId,
           status: "queued",
           trigger: "schedule",
           input: { scheduledAt: now, timezone },

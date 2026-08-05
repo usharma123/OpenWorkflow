@@ -4,21 +4,28 @@ import { vWorkflowId } from "@convex-dev/workflow";
 
 export default defineSchema({
   workflows: defineTable({
+    ownerKey: v.optional(v.string()),
+    ownerUserId: v.optional(v.string()),
+    organizationId: v.optional(v.string()),
     externalId: v.string(),
     name: v.string(),
     description: v.string(),
     enabled: v.boolean(),
     nodes: v.array(v.any()),
     edges: v.array(v.any()),
+    webhookSlug: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
     lastScheduleMinuteByNode: v.optional(v.any()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_external_id", ["externalId"])
+    .index("by_owner_external_id", ["ownerKey", "externalId"])
+    .index("by_webhook_slug_secret", ["webhookSlug", "webhookSecret"])
     .index("by_enabled", ["enabled"]),
 
   workflowRuns: defineTable({
+    ownerKey: v.optional(v.string()),
+    ownerUserId: v.optional(v.string()),
     workflowId: v.id("workflows"),
     workflowEngineId: v.optional(vWorkflowId),
     status: v.union(
@@ -36,9 +43,11 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index("by_workflow", ["workflowId"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_owner_started_at", ["ownerKey", "startedAt"]),
 
   stepRuns: defineTable({
+    ownerKey: v.optional(v.string()),
     runId: v.id("workflowRuns"),
     nodeId: v.string(),
     nodeLabel: v.string(),
@@ -59,6 +68,11 @@ export default defineSchema({
   }).index("by_run", ["runId"]),
 
   connections: defineTable({
+    // Transitional optionals allow deployment over pre-auth POC rows. The
+    // scheduled legacy cleanup removes rows that cannot be owner-isolated.
+    ownerKey: v.optional(v.string()),
+    clerkUserId: v.optional(v.string()),
+    organizationId: v.optional(v.string()),
     externalId: v.string(),
     provider: v.union(
       v.literal("google"),
@@ -67,17 +81,36 @@ export default defineSchema({
     ),
     displayName: v.string(),
     ownerLabel: v.string(),
+    externalAccountId: v.optional(v.string()),
     scopes: v.array(v.string()),
     status: v.union(v.literal("active"), v.literal("needs_reauth"), v.literal("disabled")),
-    secretLocator: v.string(),
+    secretCiphertext: v.optional(v.string()),
+    secretIv: v.optional(v.string()),
+    secretVersion: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
     lastUsedAt: v.optional(v.number()),
+    secretLocator: v.optional(v.string()),
   })
-    .index("by_external_id", ["externalId"])
-    .index("by_provider", ["provider"]),
+    .index("by_owner_external_id", ["ownerKey", "externalId"])
+    .index("by_owner_provider", ["ownerKey", "provider"]),
+
+  oauthStates: defineTable({
+    stateHash: v.string(),
+    provider: v.literal("slack"),
+    ownerKey: v.string(),
+    clerkUserId: v.string(),
+    organizationId: v.optional(v.string()),
+    returnUrl: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_state_hash", ["stateHash"])
+    .index("by_expires_at", ["expiresAt"]),
 
   auditLogs: defineTable({
+    ownerKey: v.optional(v.string()),
+    actorUserId: v.optional(v.string()),
     runId: v.optional(v.id("workflowRuns")),
     stepRunId: v.optional(v.id("stepRuns")),
     event: v.string(),
@@ -89,5 +122,6 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_run", ["runId"])
-    .index("by_created_at", ["createdAt"]),
+    .index("by_created_at", ["createdAt"])
+    .index("by_owner_created_at", ["ownerKey", "createdAt"]),
 });

@@ -1,70 +1,68 @@
-# Secure connector architecture
+# Connector and tenant architecture
 
-## Goal
+## Owner boundary
 
-A workflow may select an approved connection, but it must never read, write, log, or export the underlying OAuth credential. Provider access is mediated by a server-side adapter with an explicit operation and scope set.
-
-## Target request path
+Every authenticated request derives a principal from Convex's verified Clerk identity. The active Clerk organization becomes `org:<organizationId>`; otherwise the owner is `user:<userId>`. The browser never supplies or overrides this key.
 
 ```text
-Business user
-  → chooses connectionRef in a workflow step
-  → Convex authorizes user, workflow, operation, and resource policy
-  → adapter requests token by opaque secretLocator
-  → vault decrypts token only for the duration of the server action
-  → provider API call
-  → privacy-filtered result + append-only audit event
+Clerk session JWT
+  → Convex verifies issuer + audience
+  → server derives ownerKey and Clerk user ID
+  → every query/mutation checks the record owner
+  → durable run copies the immutable owner identity
+  → connector action resolves only that owner's connection
 ```
 
-The POC implements connection metadata, named references, fixed provider adapters, server-only token lookup, step-output redaction, approval gating, and audit rows. It deliberately uses Convex environment variables as a bootstrap secret store. OAuth callbacks, encrypted refresh-token persistence, and automatic rotation are not implemented.
+Schedules copy ownership from the saved workflow. Webhooks resolve only an enabled, owned workflow, require its server-generated secret, and start the run through an internal mutation. Duplicate public webhook slugs fail closed. Approvals require both the run and the waiting step to belong to the caller's current owner boundary.
 
-## Connection record
+## Google
 
-The `connections` table holds non-secret metadata:
+Convex stores only safe metadata:
 
-- external ID used by workflow steps
-- provider and display name
-- owner label and approved scopes
-- status (`active`, `needs_reauth`, or `disabled`)
-- opaque `secretLocator`
+- owner key and Clerk user ID
+- Clerk external account ID and display label/email
+- granted scopes and status
 - created, updated, and last-used timestamps
 
-The public list query strips `secretLocator`. A production mutation that creates or changes connections must be admin-only after authentication/RBAC is added.
+The access token remains in Clerk. For each durable Gmail or Google Docs action, the server:
 
-## Credential vault
+1. Loads the selected connection under the run's owner key.
+2. Calls Clerk `getUserOauthAccessToken()` for the run's authenticated owner.
+3. Matches the exact external account ID.
+4. Checks `gmail.readonly`, or both `documents` and `drive.file`.
+5. Calls Google with the fresh token.
+6. Marks the connection `needs_reauth` on a missing token, missing scope, 401, or 403.
+7. Persists only privacy-filtered results and audit metadata.
 
-Production should store access and refresh tokens in a dedicated encrypted secret service, keyed by tenant and connection ID. Envelope encryption should use a managed KMS key; application records keep only a vault locator. Tokens are decrypted only inside a provider action, never returned to Convex queries or the browser, and refreshes rotate atomically.
+The frontend's connect path uses Clerk `createExternalAccount()` for a new Google account and `reauthorize()` for an existing one. Both request the same explicit scopes and normally return through `/sso-callback`. Clerk session reverification can return through the app's `/` fallback instead, so a same-tab boolean `sessionStorage` marker triggers the same server-side reconciliation there. The marker carries no token or provider data and is cleared after reconciliation.
 
-Required protections:
+## Slack
 
-1. Authorization-code flow with PKCE and strict redirect URI allowlists.
-2. State and nonce validation, single-use callback state, and tenant binding.
-3. Incremental consent and the smallest provider scopes for each operation.
-4. Per-connection resource policies such as approved Drive folder, Slack channels, calendars, or Teams.
-5. Revocation and reauthorization UI with `needs_reauth` status.
-6. Token access metrics without logging token values or message/document bodies.
+Slack is implemented directly because the workflow needs a bot installation token with predictable `chat:write` behavior and workspace metadata.
 
-## Provider scope plan
+```text
+authenticated action
+  → random 256-bit state, SHA-256 hash stored for 10 minutes
+  → Slack authorization screen
+  → Convex HTTP callback consumes state exactly once
+  → server exchanges code using client secret
+  → bot token encrypted with AES-256-GCM
+  → ciphertext + IV stored on the owner-scoped connection
+```
 
-| Provider | Initial operations | Minimum scopes |
-| --- | --- | --- |
-| Gmail | Search and read selected messages | `gmail.readonly` |
-| Google Docs/Drive | Create a Doc in an app-authorized location | `documents`, `drive.file` |
-| Slack | Post an approved link | `chat:write` |
-| Google Calendar | Read selected event windows | `calendar.readonly` |
-| Outlook | Read mail, later create drafts | `Mail.Read`, then `Mail.ReadWrite` only when drafts ship |
-| Microsoft Teams | Post to approved channels | `ChannelMessage.Send` with tenant policy review |
+`CONNECTION_ENCRYPTION_KEY` is a base64-encoded 32-byte key available only to Convex actions. This is application-level encryption, not a managed KMS: deployment administrators who can read the key and database can decrypt tokens. Production environments with stronger compliance requirements should replace this boundary with envelope encryption backed by a managed KMS or dedicated secret vault, plus key rotation and access telemetry.
 
-Google Workspace may share one user grant, but each step still checks that its required scope is present. Microsoft Graph uses a separate connection and consent surface.
+Disconnect attempts Slack `auth.revoke`, then always clears the local ciphertext and disables the connection. If remote revocation cannot be confirmed, the UI says so and an administrator should verify the Slack installation.
 
-## Approval policy
+## Fail-closed behavior
 
-Approval is a durable Convex event. The workflow records the pending step before it pauses. A decision includes the run ID, node ID, decision, optional note, actor identity, and timestamp. Downstream external actions receive the prior artifact plus the approval record; rejection fails closed and prevents Slack or Teams delivery.
+- Connected mode without a selected active connection is rejected before a run starts and again on the server.
+- Missing Google token/scope and provider 401/403 mark the grant for reauthorization.
+- Missing Slack ciphertext, `chat:write`, or an invalid/revoked token marks the workspace for reconnection.
+- A rejected approval throws inside the durable workflow; no downstream Slack step executes.
+- Ownerless pre-migration data is inaccessible rather than assigned to the first user who signs in.
+- Google Calendar, Outlook, and Teams are not advertised as usable connectors.
 
-The POC actor is `editor-user`. Production must derive actor and tenant from authenticated server context, enforce the configured approver or group, prevent self-approval where policy requires it, and support expiration/escalation.
+## Stored data and audit
 
-## Audit and privacy
-
-Audit events record operation, provider, connection reference, actor, outcome, and timestamps. They do not contain tokens or full provider payloads. Step history removes Gmail snippets and bodies before persistence while retaining sender/subject metadata for an understandable run timeline.
-
-Production hardening should add append-only retention, export to the company SIEM, tenant-specific retention periods, data-subject deletion workflows, and field-level policies for generated summaries and documents.
+Workflow definitions contain only opaque connection IDs. They never contain provider tokens. Gmail snippet/body fields are removed before step output is stored. Audit events contain owner key, actor user ID, provider, connection reference, outcome, and timestamps, but no token or full provider payload.

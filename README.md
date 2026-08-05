@@ -1,133 +1,156 @@
 # OpenWorkflow
 
-OpenWorkflow is a business-friendly workflow POC for internal teams. People compose understandable steps on a visual canvas while Convex owns durable execution, approvals, audit records, and server-side credentials.
-
-The polished starter workflow is:
+OpenWorkflow is an authenticated, owner-isolated workflow builder built with Vite, React, Convex, Clerk, and Vercel. Its polished path is:
 
 ```text
-Gmail inbox → GPT-5.6 Luna → Google Doc → human approval → Slack link
+Gmail inbox → GPT-5.6 Luna via OpenRouter → Google Doc → human approval → Slack
 ```
 
-## What is implemented
+Safe demo mode is explicit and remains the default. Connected mode uses each signed-in user's approved Google or Slack connection; there are no shared bootstrap tokens.
 
-- Plain-language steps and configuration instead of developer-first action names
-- A template library, connector discovery, and an in-product “How it works” guide
-- A safe demo mode that completes the inbox workflow without touching company data
-- GPT-5.6 Luna through OpenRouter, with optional cited web search
-- Gmail read-only, Google Docs creation, and Slack posting adapters in Convex
-- Named connection references, connection metadata and scopes, privacy-aware run records, and connector audit events
-- Durable human approval with approve/reject notes before Slack can execute
-- Stage-by-stage run explanations, actionable errors, generated artifact cards, and final delivery state
-- Existing manual, schedule, webhook, condition, transform, delay, HTTPS request, and output steps
+## Implemented security model
 
-## POC reality check
+- Clerk authenticates the React app and Convex validates Clerk session JWTs.
+- Records are partitioned by the active Clerk organization, or by the Clerk user when no organization is active.
+- Workflows, runs, steps, approvals, schedules, webhook dispatch, connections, and audit events enforce that owner boundary server-side.
+- Ownerless legacy rows are not silently claimed and are inaccessible through authenticated APIs.
+- Google account metadata is stored in Convex, but Google tokens are not. Each Gmail or Docs action asks Clerk for a current provider token, validates exact scopes, and fails closed on missing or rejected grants.
+- Slack uses a direct OAuth v2 callback. Authorization state is random, hashed, owner-bound, single-use, and expires after ten minutes. Bot tokens are AES-256-GCM encrypted at rest with a Convex-only key and never returned by a query.
+- Rejected approvals terminate the durable run before Slack executes.
+- Gmail snippets and bodies are removed from persisted run output.
 
-| Capability | In this POC | Production follow-up |
-| --- | --- | --- |
-| Visual editor and persistence | Real | Add authentication, RBAC, and multi-workflow navigation |
-| Durable Convex runs and approvals | Real | Add approver identity, policy groups, reminders, and escalation |
-| Luna through OpenRouter | Real when `OPENROUTER_API_KEY` is configured | Add model allowlists, budgets, and prompt/version governance |
-| Gmail, Google Docs, Slack | Real server adapters plus safe demo mode | Replace bootstrap tokens with full OAuth authorization-code flows and encrypted token vaulting |
-| Google Calendar, Outlook, Teams | Discovery and architecture only | Add provider adapters after OAuth onboarding is available |
-| Audit trail | Connector and approval events are recorded | Add immutable retention, export, SIEM delivery, and admin review UI |
-| Safe demo | Real browser or Convex execution using representative data | Keep it available for onboarding and template testing |
+Google Calendar, Outlook, and Microsoft Teams are marked **Coming soon** because they do not yet have complete OAuth and connector paths.
 
-Safe demo is the default for Gmail, Docs, and Slack. Switching a step to **Connected** never puts a token in the workflow definition; the step carries only an approved connection reference.
+## 1. Install and run locally
 
-## Architecture
-
-```text
-Vercel (Vite + React)
-  └─ editor, templates, help, approval controls
-       └─ Convex cloud
-            ├─ workflow and run records
-            ├─ durable workflow engine and approval events
-            ├─ connection metadata and audit log
-            └─ server actions
-                 ├─ OpenRouter / openai/gpt-5.6-luna
-                 ├─ Gmail read-only adapter
-                 ├─ Google Docs create adapter
-                 └─ Slack post adapter
-```
-
-Vercel serves the frontend only. Long-running work and secret resolution stay in Convex, so runs survive frontend deploys and request-duration limits. See [Connector architecture](docs/CONNECTOR_ARCHITECTURE.md) for the target OAuth and vault design.
-
-## Local development
-
-Requirements: Bun 1.3.14 or newer and a Convex account.
+Requirements: Bun 1.3.14+, a Convex project, and a Clerk application.
 
 ```bash
 bun install
 bunx convex dev
 ```
 
-In a second terminal:
+In another terminal:
 
 ```bash
 bun run dev
 ```
 
-`bunx convex dev` creates `.env.local` with `VITE_CONVEX_URL`. Without it, the editor uses the browser-only safe demo runner. The browser demo intentionally simulates Luna as well as connectors; a Convex-backed run makes the real OpenRouter call.
-
-## Configure Luna
-
-Store OpenRouter settings in Convex, never in a `VITE_` variable:
+The project includes the Clerk CLI as a Bun dev dependency. Link an existing Clerk application only after choosing the correct workspace and instance:
 
 ```bash
-bunx convex env set OPENROUTER_API_KEY sk-or-v1-your-key
+bunx clerk auth login
+bunx clerk link
+bunx clerk env pull
+bunx clerk doctor
+```
+
+`clerk auth login` creates persistent CLI access. Do not run it in an unattended environment without the account owner's approval. The CLI can inspect or patch instance configuration with `clerk config pull`, `clerk config patch --dry-run`, and `clerk config patch`; Google Cloud OAuth credentials still need to be created in Google Cloud and entered into the Clerk connection.
+
+## 2. Configure Clerk and Convex authentication
+
+1. Create or select a Clerk development application.
+2. In Clerk, activate the **Convex** integration. Copy the Clerk Frontend API/issuer URL, such as `https://verb-noun-00.clerk.accounts.dev`.
+3. Add the publishable key to `.env.local`:
+
+   ```bash
+   VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+   ```
+
+4. Set the issuer and Clerk secret on the Convex development deployment:
+
+   ```bash
+   bunx convex env set CLERK_JWT_ISSUER_DOMAIN https://verb-noun-00.clerk.accounts.dev
+   bunx convex env set CLERK_SECRET_KEY sk_test_...
+   bunx convex env set APP_URL http://localhost:5173
+   ```
+
+5. Run `bunx convex dev` so `convex/auth.config.ts` is deployed. The Clerk JWT audience must be `convex`.
+
+Repeat the same configuration with production Clerk values on the production Convex deployment. Never expose `CLERK_SECRET_KEY` through Vite or Vercel client variables.
+
+## 3. Configure Google Workspace through Clerk
+
+OpenWorkflow requests only:
+
+- `https://www.googleapis.com/auth/gmail.readonly`
+- `https://www.googleapis.com/auth/documents`
+- `https://www.googleapis.com/auth/drive.file`
+
+In Google Cloud:
+
+1. Create/select a project and enable the Gmail API, Google Docs API, and Google Drive API.
+2. Configure the OAuth consent screen and add the three scopes above.
+3. Create a Web OAuth client using the exact redirect URI shown by Clerk's Google social connection.
+4. Keep a Testing app limited to explicit test users, or complete Google's production/verification requirements before broad release.
+
+In Clerk:
+
+1. Add Google as a social connection.
+2. Enable custom credentials and enter the Google client ID and secret.
+3. Configure the three additional scopes above.
+4. Activate the connection.
+
+The product's **Connect Google** button uses Clerk's `createExternalAccount()` or `reauthorize()` flow with those same scopes. Convex calls `getUserOauthAccessToken(userId, "google")` for every durable Gmail or Docs action and matches the selected external account ID. Google tokens never enter local storage, workflow definitions, or Convex tables.
+
+Keep the app origin and callback routes available throughout Clerk's verification flow. In development, Clerk may send a session reverification through its hosted Account Portal before returning to the app. `ClerkProvider` therefore uses `/` as its sign-in and sign-up fallback, while `/sso-callback` remains the normal OAuth callback. A same-tab `sessionStorage` marker contains only the boolean fact that Google synchronization is pending; it never contains a provider token or account data. Returning to either route causes the server to read the verified external account from Clerk and persist only safe metadata in Convex.
+
+Disconnect removes the Clerk external account. Clerk may reject removal when it is the user's only sign-in factor; add another sign-in method first in that case.
+
+## 4. Configure Slack OAuth
+
+Create a Slack app for each environment:
+
+1. Add the bot scope `chat:write`. Add `chat:write.public` only if policy explicitly allows posting to channels the app has not joined; OpenWorkflow does not request it by default.
+2. Add this exact redirect URL in **OAuth & Permissions**:
+
+   ```text
+   https://<your-convex-site>.convex.site/oauth/slack/callback
+   ```
+
+3. Set server-only Convex variables:
+
+   ```bash
+   bunx convex env set SLACK_CLIENT_ID '<client id>'
+   bunx convex env set SLACK_CLIENT_SECRET '<client secret>'
+   bunx convex env set SLACK_OAUTH_REDIRECT_URI 'https://<your-convex-site>.convex.site/oauth/slack/callback'
+   bunx convex env set CONNECTION_ENCRYPTION_KEY '<base64-encoded 32 random bytes>'
+   ```
+
+Generate the encryption key once per environment with a cryptographically secure tool, store it in the deployment secret manager, and back it up securely. Rotating it requires a token re-encryption migration or reconnecting Slack workspaces.
+
+Connected Slack steps require a channel ID such as `C0123456789`; a `#channel-name` is intentionally rejected because Slack's posting API needs an unambiguous resource identifier. The app must be invited to private channels.
+
+## 5. Configure OpenRouter
+
+```bash
+bunx convex env set OPENROUTER_API_KEY '<key>'
 bunx convex env set OPENROUTER_APP_NAME OpenWorkflow
-bunx convex env set OPENROUTER_SITE_URL https://your-app.vercel.app
+bunx convex env set OPENROUTER_SITE_URL http://localhost:5173
 ```
 
-The AI step defaults to `openai/gpt-5.6-luna`. Web search is optional and billed separately by OpenRouter.
+The key stays in Convex. Browser safe demo mode does not call OpenRouter; Convex-backed runs do.
 
-## Bootstrap connected-mode adapters
+## 6. Deploy with Vercel
 
-The POC adapter layer resolves short-lived bootstrap tokens only inside Convex. These variables demonstrate credential indirection; they are not a replacement for the production OAuth/token-vault flow.
+Vercel serves the frontend; Convex owns durable execution and secrets.
 
-```bash
-bunx convex env set GOOGLE_WORKSPACE_CONNECTION_REF google-workspace-poc
-bunx convex env set GOOGLE_WORKSPACE_ACCESS_TOKEN '<short-lived scoped token>'
-bunx convex env set SLACK_CONNECTION_REF slack-poc
-bunx convex env set SLACK_BOT_TOKEN '<scoped bot token>'
-bunx convex env set SLACK_CHANNEL_ID '<approved channel ID>'
-```
+1. Add `VITE_CLERK_PUBLISHABLE_KEY` to the Vercel project. Configure two environment-scoped values named `CONVEX_DEPLOY_KEY`: a production deploy key scoped only to **Production**, and a Convex project preview deploy key scoped only to **Preview**. Convex rejects production deploy keys in preview builds by design. In Convex Project Settings, add `CLERK_JWT_ISSUER_DOMAIN` as a **Preview** default environment variable so newly created preview deployments can compile `convex/auth.config.ts`.
+2. Use the checked-in Bun install and build settings. `vercel.json` deploys Convex and injects `VITE_CONVEX_URL` for the Vite build.
+3. Set `APP_URL` on the production Convex deployment to the canonical HTTPS Vercel domain.
+4. Use production Clerk, Google, Slack, and OpenRouter values in the production Convex deployment.
+5. Add the production `/sso-callback` URL to Clerk's allowed redirect URLs and the production Convex callback to Slack.
 
-Minimum scopes:
+Do not put Clerk secret keys, Google tokens, Slack tokens, Slack client secrets, the encryption key, or OpenRouter keys in Vercel variables prefixed with `VITE_`.
 
-- Gmail: `https://www.googleapis.com/auth/gmail.readonly`
-- Google Docs: `https://www.googleapis.com/auth/documents` plus `https://www.googleapis.com/auth/drive.file`
-- Slack: `chat:write`; add `chat:write.public` only if posting to channels the app has not joined is an approved requirement
-
-The Google adapter currently creates the document in the authorized app context. Folder placement is displayed in the POC configuration but requires a Drive move call in the next slice.
-
-## Deploy to Vercel
-
-The existing deployment contract remains unchanged:
-
-1. Create a production Convex deploy key.
-2. Add `CONVEX_DEPLOY_KEY` to Vercel.
-3. Use `bun install` as the install command.
-4. Use the checked-in Vercel build command, which runs `bunx convex deploy --cmd 'bun run build'` and injects `VITE_CONVEX_URL`.
-5. Configure Luna and connector variables in the production Convex deployment, not Vercel client variables.
-
-This feature branch has not been pushed or deployed.
-
-## Security boundaries
-
-- Workflow definitions store connection references, never access or refresh tokens.
-- Gmail uses read-only scope and stores only metadata in step history; message snippets are redacted from persisted step outputs.
-- Slack executes after the durable approval event and does not unfurl the shared link.
-- Connector use and approval decisions produce audit events.
-- Arbitrary code, shell execution, and user-authored server functions are excluded.
-- The generic HTTP step blocks obvious private/local destinations. Production still needs DNS-aware SSRF protection and an explicit hostname allowlist.
-- Authentication/RBAC, OAuth callback handling, encrypted refresh-token storage, tenant isolation, retention controls, rate limits, and audit export remain required before company-wide use.
-
-## Useful commands
+## Validation
 
 ```bash
+bunx clerk doctor
+bunx convex codegen
+bunx tsc -p convex/tsconfig.json --pretty false
 bun run typecheck
 bun run build
-bunx convex dev
-bunx convex run workflows:list
 ```
+
+`bunx convex codegen` requires `CLERK_JWT_ISSUER_DOMAIN` to already be set on the selected Convex deployment. Real Google success testing additionally requires an administrator-created Google OAuth client, Clerk custom Google credentials, and explicit user consent. Real Slack success testing separately requires a configured Slack app and explicit workspace authorization. The UI never simulates a completed grant.

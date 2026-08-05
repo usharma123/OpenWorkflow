@@ -36,7 +36,7 @@ export const NODE_CATALOG: NodeCatalogItem[] = [
     accent: "#ef4444",
     defaultConfig: {
       executionMode: "demo",
-      connectionRef: "google-workspace-poc",
+      connectionRef: "",
       search: "is:unread newer_than:1d",
       maxMessages: 5,
     },
@@ -102,7 +102,7 @@ export const NODE_CATALOG: NodeCatalogItem[] = [
     accent: "#4285f4",
     defaultConfig: {
       executionMode: "demo",
-      connectionRef: "google-workspace-poc",
+      connectionRef: "",
       title: "Inbox brief — {{input.date}}",
       folder: "OpenWorkflow briefs",
     },
@@ -117,7 +117,7 @@ export const NODE_CATALOG: NodeCatalogItem[] = [
     accent: "#36c5f0",
     defaultConfig: {
       executionMode: "demo",
-      connectionRef: "slack-poc",
+      connectionRef: "",
       channel: "#leadership-updates",
       message: "The approved inbox brief is ready: {{input.documentUrl}}",
     },
