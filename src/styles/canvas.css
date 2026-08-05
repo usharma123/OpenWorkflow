@@ -1,0 +1,261 @@
+/* React Flow surface and the workflow node card. */
+
+.canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.react-flow__pane {
+  cursor: default;
+}
+
+.react-flow__edge-path {
+  stroke: var(--ink-6);
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--ink-8);
+}
+
+/* Generous invisible hit area, small visible dot. */
+.react-flow__handle {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.react-flow__handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid var(--ink-6);
+  border-radius: 50%;
+  background: var(--ink-0);
+  transition: width var(--fast) var(--ease), height var(--fast) var(--ease),
+    background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+
+.react-flow__handle:hover::after,
+.react-flow__handle.connectingfrom::after,
+.react-flow__handle.connectingto::after {
+  width: 13px;
+  height: 13px;
+  border-color: var(--ink-9);
+  background: var(--ink-9);
+}
+
+.react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.react-flow__controls-button {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  fill: var(--text-secondary);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--surface-hover);
+  fill: var(--text);
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.react-flow__attribution {
+  background: transparent;
+  color: var(--ink-5);
+}
+
+/* ---- Node card ----------------------------------------------------------- */
+
+.wf-node {
+  width: 244px;
+  padding: 11px 12px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
+    transform var(--fast) var(--ease);
+}
+
+.wf-node:hover {
+  border-color: var(--border-strong);
+}
+
+.wf-node.is-selected {
+  border-color: var(--ink-7);
+  box-shadow: var(--shadow), 0 0 0 1px var(--ink-7);
+}
+
+.wf-node.status-running {
+  border-color: var(--ink-6);
+  animation: node-breathe 1.8s var(--ease) infinite;
+}
+
+@keyframes node-breathe {
+  0%,
+  100% {
+    box-shadow: var(--shadow), 0 0 0 1px var(--ink-6);
+  }
+  50% {
+    box-shadow: var(--shadow), 0 0 0 3px var(--ink-4);
+  }
+}
+
+.wf-node.status-waiting {
+  border-color: var(--ink-7);
+  border-style: dashed;
+}
+
+.wf-node.status-error {
+  border-color: var(--danger-border);
+  box-shadow: var(--shadow), 0 0 0 1px var(--danger-border);
+}
+
+.wf-node-head {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.wf-node-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--ink-0);
+  color: var(--text-secondary);
+}
+
+.wf-node-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wf-node-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  color: var(--text);
+}
+
+.wf-node-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.wf-node-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.wf-node-kind {
+  color: var(--ink-6);
+  font-weight: 500;
+}
+
+.wf-node-demo {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.wf-node-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.wf-node-status.error {
+  color: var(--danger-text);
+}
+
+.wf-branch {
+  position: absolute;
+  right: 10px;
+  color: var(--ink-6);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.wf-branch.is-true {
+  top: 30%;
+}
+
+.wf-branch.is-false {
+  top: 68%;
+}
+
+/* ---- Canvas overlays ----------------------------------------------------- */
+
+.canvas-note {
+  position: absolute;
+  z-index: 4;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--text-muted);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+  pointer-events: none;
+}

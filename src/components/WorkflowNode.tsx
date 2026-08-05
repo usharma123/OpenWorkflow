@@ -1,21 +1,25 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { LoaderCircle } from "lucide-react";
 import { catalogByType } from "../catalog";
 import type { WorkflowNode } from "../types";
-import { NODE_ICONS } from "./icons";
+import { NodeMark } from "./icons";
+
+const STATUS_LABEL: Record<string, string> = {
+  running: "Running",
+  waiting: "Waiting for you",
+  success: "Done",
+  error: "Failed",
+};
 
 export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode>) {
   const item = catalogByType[data.nodeType];
-  const Icon = NODE_ICONS[data.nodeType];
   const isTrigger = data.nodeType.endsWith("Trigger");
   const isOutput = data.nodeType === "output";
   const isCondition = data.nodeType === "condition";
+  const status = data.status ?? "idle";
+  const isDemo = item.setup === "connection" && data.config.executionMode !== "live";
 
   return (
-    <div
-      className={`workflow-node ${selected ? "selected" : ""} ${data.status ?? "idle"}`}
-      style={{ "--node-accent": item.accent } as React.CSSProperties}
-    >
+    <div className={`wf-node ${selected ? "is-selected" : ""} status-${status}`}>
       {!isTrigger && (
         <Handle
           type="target"
@@ -24,14 +28,38 @@ export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode
           title="Drop a connection here"
         />
       )}
-      <div className="node-icon">
-        {data.status === "running" ? <LoaderCircle className="spin" size={17} /> : <Icon size={17} />}
+
+      <div className="wf-node-head">
+        <span className="wf-node-mark">
+          <NodeMark type={data.nodeType} size={17} />
+        </span>
+        <span className="wf-node-copy">
+          <strong>{data.label}</strong>
+          <span>{data.description}</span>
+        </span>
       </div>
-      <div className="node-copy">
-        <strong>{data.label}</strong>
-        <span>{data.description}</span>
+
+      <div className="wf-node-foot">
+        <span className="wf-node-kind">{item.category}</span>
+        {isDemo && <span className="wf-node-demo">Demo</span>}
+        {status !== "idle" && (
+          <span className={`wf-node-status ${status}`}>
+            <span
+              className={`dot ${
+                status === "running"
+                  ? "dot-running"
+                  : status === "waiting"
+                    ? "dot-waiting"
+                    : status === "error"
+                      ? "dot-failed"
+                      : "dot-done"
+              }`}
+            />
+            {STATUS_LABEL[status]}
+          </span>
+        )}
       </div>
-      {data.status === "success" && <span className="node-status-dot" aria-label="Completed" />}
+
       {!isOutput && !isCondition && (
         <Handle
           type="source"
@@ -42,10 +70,24 @@ export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode
       )}
       {isCondition && (
         <>
-          <span className="branch-label true">true</span>
-          <Handle id="true" type="source" position={Position.Right} style={{ top: "35%" }} aria-label={`Connect true branch from ${data.label}`} title="Drag the true branch" />
-          <span className="branch-label false">false</span>
-          <Handle id="false" type="source" position={Position.Right} style={{ top: "70%" }} aria-label={`Connect false branch from ${data.label}`} title="Drag the false branch" />
+          <span className="wf-branch is-true">true</span>
+          <Handle
+            id="true"
+            type="source"
+            position={Position.Right}
+            style={{ top: "34%" }}
+            aria-label={`Connect true branch from ${data.label}`}
+            title="Drag the true branch"
+          />
+          <span className="wf-branch is-false">false</span>
+          <Handle
+            id="false"
+            type="source"
+            position={Position.Right}
+            style={{ top: "72%" }}
+            aria-label={`Connect false branch from ${data.label}`}
+            title="Drag the false branch"
+          />
         </>
       )}
     </div>

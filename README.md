@@ -91,6 +91,10 @@ In Clerk:
 3. Configure the three additional scopes above.
 4. Activate the connection.
 
+Those Clerk connection scopes are what make the initial Google sign-in double as a Workspace
+grant. If they are absent or incomplete, sign-in still succeeds; the setup screen detects the
+missing grant and offers a separate **Connect Google** authorization flow.
+
 The product's **Connect Google** button uses Clerk's `createExternalAccount()` or `reauthorize()` flow with those same scopes. Convex calls `getUserOauthAccessToken(userId, "google")` for every durable Gmail or Docs action and matches the selected external account ID. Google tokens never enter local storage, workflow definitions, or Convex tables.
 
 Keep the app origin and callback routes available throughout Clerk's verification flow. In development, Clerk may send a session reverification through its hosted Account Portal before returning to the app. `ClerkProvider` therefore uses `/` as its sign-in and sign-up fallback, while `/sso-callback` remains the normal OAuth callback. A same-tab `sessionStorage` marker contains only the boolean fact that Google synchronization is pending; it never contains a provider token or account data. Returning to either route causes the server to read the verified external account from Clerk and persist only safe metadata in Convex.
@@ -130,6 +134,8 @@ bunx convex env set OPENROUTER_SITE_URL http://localhost:5173
 ```
 
 The key stays in Convex. Browser safe demo mode does not call OpenRouter; Convex-backed runs do.
+OpenRouter responses are consumed as SSE streams. The current model text is patched to the active
+step at most once every 200ms so the run transcript updates live without creating a write per token.
 
 ## 6. Deploy with Vercel
 

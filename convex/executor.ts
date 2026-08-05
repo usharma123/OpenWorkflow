@@ -2,6 +2,7 @@ import { WorkflowManager } from "@convex-dev/workflow";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from "./openrouterStream";
 import { applyApprovalDecision } from "./policies";
 import { renderTemplate, valueAtPath } from "./template";
 
@@ -144,6 +145,15 @@ export const finishStep = internalMutation({
   },
 });
 
+export const updateStepPartialOutput = internalMutation({
+  args: { stepRunId: v.id("stepRuns"), partialOutput: v.string() },
+  handler: async (ctx, { stepRunId, partialOutput }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    if (!stepRun || stepRun.status !== "running") return;
+    await ctx.db.patch(stepRunId, { partialOutput });
+  },
+});
+
 export const failStep = internalMutation({
   args: { stepRunId: v.id("stepRuns"), error: v.string() },
   handler: async (ctx, { stepRunId, error }) => {
@@ -184,8 +194,14 @@ export const failRun = internalMutation({
 });
 
 export const executeNode = internalAction({
-  args: { node: v.any(), input: v.any(), ownerKey: v.string(), ownerUserId: v.string() },
-  handler: async (ctx, { node, input, ownerKey, ownerUserId }): Promise<unknown> => {
+  args: {
+    node: v.any(),
+    input: v.any(),
+    ownerKey: v.string(),
+    ownerUserId: v.string(),
+    stepRunId: v.optional(v.id("stepRuns")),
+  },
+  handler: async (ctx, { node, input, ownerKey, ownerUserId, stepRunId }): Promise<unknown> => {
     const typedNode = node as WorkflowNode;
     const { nodeType, config } = typedNode.data;
 
@@ -290,16 +306,53 @@ export const executeNode = internalAction({
             { role: "user", content: renderTemplate(String(config.prompt ?? "{{input}}"), input) },
           ],
           tools,
+          stream: true,
+          stream_options: { include_usage: true },
         }),
       });
-      const payload = (await response.json()) as {
-        error?: { message?: string };
-        choices?: Array<{ message?: { content?: string; annotations?: unknown[] } }>;
-        usage?: unknown;
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+        throw new Error(payload.error?.message ?? `OpenRouter request failed (${response.status}).`);
+      }
+      if (!response.body) throw new Error("OpenRouter returned an empty streaming response.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamState: OpenRouterStreamState = { content: "", annotations: [] };
+      let lastPatchAt = 0;
+      let lastPatchedContent = "";
+
+      const patchPartialOutput = async (force = false) => {
+        if (!stepRunId || !streamState.content || streamState.content === lastPatchedContent) return;
+        const now = Date.now();
+        if (!force && now - lastPatchAt < 200) return;
+        await ctx.runMutation(internal.executor.updateStepPartialOutput, {
+          stepRunId,
+          partialOutput: streamState.content,
+        });
+        lastPatchAt = Date.now();
+        lastPatchedContent = streamState.content;
       };
-      if (!response.ok) throw new Error(payload.error?.message ?? `OpenRouter request failed (${response.status}).`);
-      const message = payload.choices?.[0]?.message;
-      return { ...(input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}), content: message?.content ?? "", citations: message?.annotations ?? [], usage: payload.usage };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const parsed = takeSseEvents(buffer);
+        buffer = parsed.rest;
+        for (const event of parsed.events) streamState = applyOpenRouterEvent(streamState, event);
+        await patchPartialOutput();
+        if (done) break;
+      }
+      if (buffer.trim()) streamState = applyOpenRouterEvent(streamState, buffer);
+      await patchPartialOutput(true);
+
+      return {
+        ...(input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}),
+        content: streamState.content,
+        citations: streamState.annotations,
+        usage: streamState.usage,
+      };
     }
 
     if (nodeType === "googleDoc") {
@@ -372,7 +425,7 @@ export const executeWorkflow = workflow
             (node.data.nodeType === "googleDoc" || node.data.nodeType === "slack");
           value = await step.runAction(
             internal.executor.executeNode,
-            { node, input: value, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId },
+            { node, input: value, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
             isNonIdempotentLiveWrite
               ? undefined
               : { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },

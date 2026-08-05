@@ -1,0 +1,66 @@
+/*
+ * The entire product palette. One neutral ramp on ink, plus a single reserved
+ * red for failure and destructive intent. Brand colour appears only inside
+ * vendor marks (see components/BrandMarks.tsx) and never in UI chrome.
+ */
+:root {
+  /* Neutral ramp, dark to light. */
+  --ink-0: #0a0a0b;
+  --ink-1: #0e0e10;
+  --ink-2: #121215;
+  --ink-3: #17171a;
+  --ink-4: #1f1f23;
+  --ink-5: #2a2a30;
+  --ink-6: #3a3a42;
+  --ink-7: #6e6e78;
+  --ink-8: #9d9da8;
+  --ink-9: #c8c8d0;
+  --ink-10: #f4f4f5;
+
+  /* Semantic surfaces. */
+  --bg: var(--ink-0);
+  --surface: var(--ink-1);
+  --surface-raised: var(--ink-2);
+  --surface-hover: var(--ink-3);
+  --border: var(--ink-4);
+  --border-strong: var(--ink-5);
+
+  /* Semantic text. */
+  --text: var(--ink-10);
+  --text-secondary: var(--ink-8);
+  --text-muted: var(--ink-7);
+
+  /* The only reserved hue in the product: failure and destructive intent. */
+  --danger: #e5484d;
+  --danger-text: #ff9ea1;
+  --danger-surface: #2a1315;
+  --danger-border: #4d2125;
+
+  /* Geometry. */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  /* Elevation. A single soft shadow, used sparingly. */
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 2px 4px rgb(0 0 0 / 0.3), 0 24px 60px -12px rgb(0 0 0 / 0.6);
+
+  /* Typography. */
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace;
+
+  /* Motion. */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --fast: 120ms;
+  --normal: 200ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

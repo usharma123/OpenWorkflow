@@ -1,19 +1,15 @@
-import { ChevronRight, GripVertical, LayoutTemplate, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { NODE_CATALOG } from "../catalog";
 import type { NodeCategory, WorkflowNodeType } from "../types";
-import { NODE_ICONS } from "./icons";
+import { NodeMark } from "./icons";
 
-const categories: NodeCategory[] = ["Start", "Think", "Review", "Deliver", "Advanced"];
+const CATEGORIES: NodeCategory[] = ["Start", "Think", "Review", "Deliver", "Advanced"];
 
-interface NodePaletteProps {
-  onAdd: (type: WorkflowNodeType) => void;
-  onOpenLibrary: () => void;
-}
-
-export function NodePalette({ onAdd, onOpenLibrary }: NodePaletteProps) {
+export function NodePalette({ onAdd }: { onAdd: (type: WorkflowNodeType) => void }) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
+
   const filtered = useMemo(
     () =>
       NODE_CATALOG.filter(
@@ -31,58 +27,46 @@ export function NodePalette({ onAdd, onOpenLibrary }: NodePaletteProps) {
   };
 
   return (
-    <aside className="palette panel">
-      <div className="panel-heading">
-        <span>Steps</span>
-        <small>{NODE_CATALOG.length}</small>
-      </div>
-      <button className="template-launch" onClick={onOpenLibrary}>
-        <LayoutTemplate size={15} />
-        <span><strong>Start from a template</strong><small>Use a proven business workflow</small></span>
-        <ChevronRight size={14} />
-      </button>
-      <label className="search-box">
-        <Search size={15} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a step" />
+    <aside className="palette">
+      <label className="palette-search">
+        <Search size={14} />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Find a step"
+          aria-label="Find a step"
+        />
       </label>
+
       <div className="palette-scroll">
-        {categories.map((category) => {
+        {CATEGORIES.map((category) => {
           const items = filtered.filter((item) => item.category === category);
           if (items.length === 0) return null;
           return (
             <section key={category} className="palette-group">
-              <div className="palette-category">
-                <ChevronRight size={13} />
-                {category}
-              </div>
-              {items.map((item) => {
-                const Icon = NODE_ICONS[item.type];
-                return (
-                  <button
-                    className="palette-item"
-                    key={item.type}
-                    draggable
-                    onDragStart={(event) => startDrag(event, item.type)}
-                    onClick={() => onAdd(item.type)}
-                  >
-                    <GripVertical className="drag-grip" size={13} />
-                    <span className="palette-icon" style={{ color: item.accent }}>
-                      <Icon size={16} />
-                    </span>
-                    <span>
-                      <strong>{item.label}</strong>
-                      <small>{item.description}</small>
-                    </span>
-                  </button>
-                );
-              })}
+              <span className="t-eyebrow">{category}</span>
+              {items.map((item) => (
+                <button
+                  className="palette-item"
+                  key={item.type}
+                  draggable
+                  onDragStart={(event) => startDrag(event, item.type)}
+                  onClick={() => onAdd(item.type)}
+                  title={item.outcome}
+                >
+                  <span className="palette-mark">
+                    <NodeMark type={item.type} size={15} />
+                  </span>
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                </button>
+              ))}
             </section>
           );
         })}
-      </div>
-      <div className="palette-foot">
-        <span className="safe-dot" /> Guardrails are on
-        <small>Credentials stay server-side</small>
+        {filtered.length === 0 && <p className="t-small t-muted palette-none">No steps match “{query}”.</p>}
       </div>
     </aside>
   );

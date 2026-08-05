@@ -56,6 +56,7 @@ export interface RunStepSummary {
   status: "running" | "waiting" | "completed" | "failed" | "skipped";
   startedAt: number;
   completedAt?: number;
+  partialOutput?: string;
   output?: unknown;
   error?: string;
 }
@@ -92,7 +93,6 @@ export interface NodeCatalogItem {
   label: string;
   description: string;
   category: NodeCategory;
-  accent: string;
   defaultConfig: Record<string, unknown>;
   outcome: string;
   setup?: "none" | "connection";

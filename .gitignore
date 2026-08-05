@@ -6,3 +6,4 @@ dist
 .convex
 *.log
 .DS_Store
+.gstack/

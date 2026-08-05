@@ -6,8 +6,13 @@ const convexUrl = import.meta.env.VITE_CONVEX_URL?.trim();
 
 export const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : undefined;
 
+export const listWorkflowsRef = api.workflows.list;
+export const listRunsRef = api.runs.listForWorkflow;
 export const getWorkflowRef = api.workflows.getByExternalId;
 export const upsertWorkflowRef = api.workflows.upsert;
+export const renameWorkflowRef = api.workflows.rename;
+export const duplicateWorkflowRef = api.workflows.duplicate;
+export const removeWorkflowRef = api.workflows.remove;
 export const startRunRef = api.runs.startRun;
 export const getRunRef = api.runs.get;
 export const approveRunRef = api.runs.approve;

@@ -15,6 +15,7 @@ import type * as connectorExecution from "../connectorExecution.js";
 import type * as crons from "../crons.js";
 import type * as executor from "../executor.js";
 import type * as http from "../http.js";
+import type * as openrouterStream from "../openrouterStream.js";
 import type * as policies from "../policies.js";
 import type * as runs from "../runs.js";
 import type * as schedules from "../schedules.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   executor: typeof executor;
   http: typeof http;
+  openrouterStream: typeof openrouterStream;
   policies: typeof policies;
   runs: typeof runs;
   schedules: typeof schedules;

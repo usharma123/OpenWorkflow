@@ -19,7 +19,7 @@ export const list = query({
     const principal = await requirePrincipal(ctx);
     return ctx.db
       .query("workflows")
-      .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey))
+      .withIndex("by_owner_updated_at", (q) => q.eq("ownerKey", principal.ownerKey))
       .order("desc")
       .collect();
   },
@@ -99,6 +99,54 @@ export const upsert = mutation({
   },
 });
 
+export const rename = mutation({
+  args: { workflowId: v.id("workflows"), name: v.string() },
+  handler: async (ctx, { workflowId, name }) => {
+    const principal = await requirePrincipal(ctx);
+    const workflow = await ctx.db.get(workflowId);
+    if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Workflow names cannot be empty.");
+    if (trimmed.length > 120) throw new Error("Workflow names must be 120 characters or fewer.");
+    await ctx.db.patch(workflowId, { name: trimmed, updatedAt: Date.now() });
+  },
+});
+
+export const duplicate = mutation({
+  args: { workflowId: v.id("workflows"), externalId: v.string(), name: v.string() },
+  handler: async (ctx, { workflowId, externalId, name }) => {
+    const principal = await requirePrincipal(ctx);
+    const source = await ctx.db.get(workflowId);
+    if (!source || source.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
+    const existing = await ctx.db
+      .query("workflows")
+      .withIndex("by_owner_external_id", (q) =>
+        q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId),
+      )
+      .unique();
+    if (existing) throw new Error("A workflow with this ID already exists.");
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Workflow names cannot be empty.");
+    if (trimmed.length > 120) throw new Error("Workflow names must be 120 characters or fewer.");
+    const now = Date.now();
+    return ctx.db.insert("workflows", {
+      ownerKey: principal.ownerKey,
+      ownerUserId: source.ownerUserId ?? principal.userId,
+      organizationId: principal.organizationId,
+      externalId,
+      name: trimmed,
+      description: source.description,
+      enabled: false,
+      nodes: source.nodes,
+      edges: source.edges,
+      webhookSlug: source.webhookSlug,
+      webhookSecret: source.webhookSlug ? crypto.randomUUID().replaceAll("-", "") : undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
 export const remove = mutation({
   args: { workflowId: v.id("workflows") },
   handler: async (ctx, { workflowId }) => {
@@ -109,6 +157,8 @@ export const remove = mutation({
     for (const run of runs) {
       const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
       for (const step of steps) await ctx.db.delete(step._id);
+      const auditLogs = await ctx.db.query("auditLogs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
+      for (const auditLog of auditLogs) await ctx.db.delete(auditLog._id);
       await ctx.db.delete(run._id);
     }
     await ctx.db.delete(workflowId);

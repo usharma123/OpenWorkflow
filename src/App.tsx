@@ -12,224 +12,77 @@ import {
   type Connection,
   type Edge,
 } from "@xyflow/react";
-import {
-  Check,
-  ChevronDown,
-  Cloud,
-  HelpCircle,
-  History,
-  PlugZap,
-  Play,
-  Redo2,
-  RotateCcw,
-  Save,
-  Sparkles,
-  Undo2,
-  Workflow,
-} from "lucide-react";
+import { Check, Loader2, Play, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { UserButton, useReverification, useUser } from "@clerk/react";
-import { catalogByType } from "./catalog";
+import { useNavigate, useParams } from "react-router-dom";
+import { catalogByType, STARTER_WORKFLOW } from "./catalog";
 import { Inspector } from "./components/Inspector";
 import { NodePalette } from "./components/NodePalette";
-import { OutputPanel } from "./components/OutputPanel";
-import { ResourceHub, type HubTab } from "./components/ResourceHub";
-import { RunPanel } from "./components/RunPanel";
+import { RunTranscript } from "./components/RunTranscript";
+import { SidePanel, type PanelMode } from "./components/SidePanel";
 import { WorkflowNodeComponent } from "./components/WorkflowNode";
+import { useConnections } from "./lib/connections";
 import {
-  convexClient,
   approveRunRef,
-  disconnectGoogleRef,
-  disconnectSlackRef,
+  convexClient,
   getRunRef,
   getWorkflowRef,
   listConnectionsRef,
-  startSlackOAuthRef,
   startRunRef,
-  syncGoogleRef,
   upsertWorkflowRef,
-  type ConnectionMetadata,
 } from "./lib/convexClient";
 import { runDemo } from "./lib/demoRunner";
-import { GOOGLE_SCOPES, hasRequiredGoogleScopes } from "./lib/googleAuth";
-import { loadWorkflow, resetWorkflow, saveWorkflow } from "./lib/storage";
 import { validateWorkflowConnection } from "./lib/workflowConnections";
-import type { LatestRunResult, PendingApproval, RunLog, WorkflowNode, WorkflowNodeType } from "./types";
+import type {
+  LatestRunResult,
+  PendingApproval,
+  RunLog,
+  WorkflowNode,
+  WorkflowNodeType,
+} from "./types";
 
 const nodeTypes = { workflow: WorkflowNodeComponent };
-const GOOGLE_CONNECTION_PENDING_KEY = "openworkflow.googleConnectionPending";
-
-function connectionError(error: unknown, fallback: string): string {
-  const data = error && typeof error === "object" && "data" in error
-    ? (error as { data?: unknown }).data
-    : undefined;
-  const code = data && typeof data === "object" && "code" in data
-    ? (data as { code?: unknown }).code
-    : undefined;
-  if (code === "CONNECTION_SLACK_NOT_CONFIGURED") {
-    return "Slack OAuth is not configured yet. Ask an administrator to add the Slack app credentials and encryption key.";
-  }
-  if (code === "CONNECTION_GOOGLE_AUTHORIZATION_FAILED") {
-    return "Google needs to be reauthorized with Gmail, Docs, and Drive access. Open Connectors and reconnect the account.";
-  }
-  if (!(error instanceof Error)) return fallback;
-  const message = error.message;
-  const serverMessage = message.match(/Uncaught Error:\s*([^\n]+)/)?.[1];
-  return serverMessage ?? message;
-}
 
 function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
   return nodes.map((node) => {
     const { status: _status, ...data } = node.data;
-    return {
-      id: node.id,
-      type: "workflow",
-      position: node.position,
-      data,
-    };
+    return { id: node.id, type: "workflow" as const, position: node.position, data };
   });
 }
 
 export default function App() {
-  const { user } = useUser();
-  const initial = useMemo(() => loadWorkflow(), []);
+  const navigate = useNavigate();
+  const { workflowId } = useParams<{ workflowId: string }>();
+  const { connections, setNotice, refresh: refreshConnections } = useConnections();
+
+  const initial = useMemo(
+    () => ({ ...structuredClone(STARTER_WORKFLOW), id: workflowId ?? STARTER_WORKFLOW.id }),
+    [workflowId],
+  );
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [name, setName] = useState(initial.name);
+  const [description, setDescription] = useState(initial.description);
   const [enabled, setEnabled] = useState(initial.enabled);
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [saved, setSaved] = useState(true);
   const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState<RunLog[]>([]);
-  const [runPanelOpen, setRunPanelOpen] = useState(false);
+  const [, setLogs] = useState<RunLog[]>([]);
   const [latestResult, setLatestResult] = useState<LatestRunResult>();
-  const [notice, setNotice] = useState<string>();
-  const [hubTab, setHubTab] = useState<HubTab>();
   const [pendingApproval, setPendingApproval] = useState<PendingApproval>();
   const [approvalBusy, setApprovalBusy] = useState(false);
-  const [backendLoaded, setBackendLoaded] = useState(!convexClient);
-  const [connections, setConnections] = useState<ConnectionMetadata[]>([]);
-  const [connectionBusy, setConnectionBusy] = useState<string>();
+  const [backendLoaded, setBackendLoaded] = useState(false);
+  const [panelMode, setPanelMode] = useState<PanelMode>("run");
+
   const reactFlow = useReactFlow<WorkflowNode>();
   const saveTimer = useRef<number | undefined>(undefined);
-  const noticeTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
-  const demoApprovalResolver = useRef<((decision: { approved: boolean; note?: string }) => void) | undefined>(undefined);
-
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
-
-  const createGoogleAccount = useReverification(
-    (args: Parameters<NonNullable<typeof user>["createExternalAccount"]>[0]) => user!.createExternalAccount(args),
+  const skipInitialSave = useRef(true);
+  const demoApprovalResolver = useRef<((decision: { approved: boolean; note?: string }) => void) | undefined>(
+    undefined,
   );
 
-  const refreshConnections = useCallback(async () => {
-    if (!convexClient) return;
-    setConnections(await convexClient.query(listConnectionsRef, {}));
-  }, []);
-
-  useEffect(() => {
-    void refreshConnections().catch(() => undefined);
-  }, [refreshConnections]);
-
-  useEffect(() => {
-    if (!convexClient) return;
-    const params = new URLSearchParams(window.location.search);
-    const integration = params.get("integration");
-    const status = params.get("status");
-    const pendingGoogleConnection = window.sessionStorage.getItem(GOOGLE_CONNECTION_PENDING_KEY) === "true";
-    if (!integration && !pendingGoogleConnection) return;
-    const detail = params.get("detail");
-    window.history.replaceState({}, "", window.location.pathname);
-    if ((integration === "google" && status === "connected") || (!integration && pendingGoogleConnection)) {
-      setConnectionBusy("google");
-      void convexClient.action(syncGoogleRef, {})
-        .then(async (result) => {
-          await refreshConnections();
-          setNotice(result.count > 0
-            ? "Google Workspace connected"
-            : "Google authorization did not return an account. Open Connectors and reconnect.");
-        })
-        .catch((error) => setNotice(connectionError(error, "Google connection could not be synchronized")))
-        .finally(() => {
-          window.sessionStorage.removeItem(GOOGLE_CONNECTION_PENDING_KEY);
-          setConnectionBusy(undefined);
-        });
-    } else if (integration === "slack" && status === "connected") {
-      void refreshConnections().then(() => setNotice("Slack workspace connected"));
-    } else {
-      setNotice(detail || `${integration === "slack" ? "Slack" : "Google"} connection was not completed`);
-    }
-  }, [refreshConnections]);
-
-  const connectGoogle = async () => {
-    if (!user || !convexClient) return;
-    setConnectionBusy("google");
-    try {
-      const existing = user.externalAccounts.find((account) => account.provider === "google");
-      if (existing && hasRequiredGoogleScopes(existing.approvedScopes)) {
-        const result = await convexClient.action(syncGoogleRef, {});
-        await refreshConnections();
-        setNotice(result.count > 0
-          ? "Google Workspace connected"
-          : "Google authorization did not return an account. Open Connectors and reconnect.");
-        setConnectionBusy(undefined);
-        return;
-      }
-
-      const redirectUrl = existing ? window.location.href : `${window.location.origin}/sso-callback`;
-      const account = existing
-        ? await existing.reauthorize({ additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" })
-        : await createGoogleAccount({ strategy: "oauth_google", additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" });
-      const verificationUrl = account?.verification?.externalVerificationRedirectURL;
-      if (!verificationUrl) throw new Error("Clerk did not return a Google authorization URL.");
-      window.sessionStorage.setItem(GOOGLE_CONNECTION_PENDING_KEY, "true");
-      window.location.assign(verificationUrl.href);
-    } catch (error) {
-      window.sessionStorage.removeItem(GOOGLE_CONNECTION_PENDING_KEY);
-      setConnectionBusy(undefined);
-      setNotice(connectionError(error, "Could not start Google authorization"));
-    }
-  };
-
-  const disconnectGoogle = async (externalId: string) => {
-    if (!convexClient) return;
-    setConnectionBusy(externalId);
-    try {
-      await convexClient.action(disconnectGoogleRef, { externalId });
-      await refreshConnections();
-      setNotice("Google disconnected from OpenWorkflow; your Clerk sign-in remains linked");
-    } catch (error) {
-      setNotice(connectionError(error, "Could not disconnect Google"));
-    } finally {
-      setConnectionBusy(undefined);
-    }
-  };
-
-  const connectSlack = async () => {
-    if (!convexClient) return;
-    setConnectionBusy("slack");
-    try {
-      const authorizeUrl = await convexClient.action(startSlackOAuthRef, { returnUrl: window.location.href });
-      window.location.assign(authorizeUrl);
-    } catch (error) {
-      setConnectionBusy(undefined);
-      setNotice(connectionError(error, "Could not start Slack authorization"));
-    }
-  };
-
-  const disconnectSlack = async (externalId: string) => {
-    if (!convexClient) return;
-    setConnectionBusy(externalId);
-    try {
-      const result = await convexClient.action(disconnectSlackRef, { externalId });
-      await refreshConnections();
-      setNotice(result.revoked ? "Slack workspace disconnected and token revoked" : "Slack disconnected locally; an administrator should verify remote revocation");
-    } catch (error) {
-      setNotice(connectionError(error, "Could not disconnect Slack"));
-    } finally {
-      setConnectionBusy(undefined);
-    }
-  };
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
 
   useEffect(() => {
     if (!convexClient || hydratedOnce.current) return;
@@ -237,79 +90,92 @@ export default function App() {
     void convexClient
       .query(getWorkflowRef, { externalId: initial.id })
       .then((remote) => {
-        if (!remote) return;
+        if (!remote) {
+          setNotice({ message: "That workflow no longer exists.", tone: "error" });
+          navigate("/workflows", { replace: true });
+          return;
+        }
         setName(remote.name);
+        setDescription(remote.description);
         setEnabled(remote.enabled);
         setNodes(remote.nodes);
         setEdges(remote.edges);
+        setBackendLoaded(true);
       })
-      .catch((error) => {
-        setNotice(error instanceof Error ? `Convex: ${error.message}` : "Could not load from Convex");
-      })
-      .finally(() => setBackendLoaded(true));
-  }, [initial.id, setEdges, setNodes]);
+      .catch((error) =>
+        setNotice({
+          message: error instanceof Error ? error.message : "Could not load this workflow",
+          tone: "error",
+        }),
+      )
+  }, [initial.id, navigate, setEdges, setNodes, setNotice]);
 
   useEffect(() => {
     if (!backendLoaded) return;
+    if (skipInitialSave.current) {
+      skipInitialSave.current = false;
+      return;
+    }
     setSaved(false);
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       const definition = {
         ...initial,
         name,
+        description,
         enabled,
         nodes: persistableNodes(nodes),
         edges,
         updatedAt: Date.now(),
       };
-      saveWorkflow(definition);
-      if (convexClient) {
-        void convexClient
-          .mutation(upsertWorkflowRef, {
-            externalId: definition.id,
-            name: definition.name,
-            description: definition.description,
-            enabled: definition.enabled,
-            nodes: definition.nodes,
-            edges: definition.edges,
-            updatedAt: definition.updatedAt,
-          })
-          .then(() => setSaved(true))
-          .catch((error) => {
-            setNotice(error instanceof Error ? `Save failed: ${error.message}` : "Convex save failed");
-          });
-      } else {
+      if (!convexClient) {
         setSaved(true);
+        return;
       }
+      void convexClient
+        .mutation(upsertWorkflowRef, {
+          externalId: definition.id,
+          name: definition.name,
+          description: definition.description,
+          enabled: definition.enabled,
+          nodes: definition.nodes,
+          edges: definition.edges,
+          updatedAt: definition.updatedAt,
+        })
+        .then(() => setSaved(true))
+        .catch((error) =>
+          setNotice({
+            message: error instanceof Error ? `Save failed: ${error.message}` : "Save failed",
+            tone: "error",
+          }),
+        );
     }, 500);
     return () => window.clearTimeout(saveTimer.current);
-  }, [backendLoaded, edges, enabled, initial, name, nodes]);
+  }, [backendLoaded, description, edges, enabled, initial, name, nodes, setNotice]);
 
-  const showTemporaryNotice = useCallback((message: string) => {
-    window.clearTimeout(noticeTimer.current);
-    setNotice(message);
-    noticeTimer.current = window.setTimeout(() => setNotice(undefined), 2800);
-  }, []);
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      const problem = validateWorkflowConnection(connection, edges);
+      if (problem) {
+        setNotice({ message: problem, tone: "error" });
+        return;
+      }
+      setEdges((current) => addEdge({ ...connection, animated: true }, current));
+    },
+    [edges, setEdges, setNotice],
+  );
 
-  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
-
-  const onConnect = useCallback((connection: Connection) => {
-    const problem = validateWorkflowConnection(connection, edges);
-    if (problem) {
-      showTemporaryNotice(problem);
-      return;
-    }
-    setEdges((current) => addEdge({ ...connection, animated: true }, current));
-  }, [edges, setEdges, showTemporaryNotice]);
-
-  const onReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
-    const problem = validateWorkflowConnection(connection, edges, oldEdge.id);
-    if (problem) {
-      showTemporaryNotice(problem);
-      return;
-    }
-    setEdges((current) => reconnectEdge(oldEdge, connection, current));
-  }, [edges, setEdges, showTemporaryNotice]);
+  const onReconnect = useCallback(
+    (oldEdge: Edge, connection: Connection) => {
+      const problem = validateWorkflowConnection(connection, edges, oldEdge.id);
+      if (problem) {
+        setNotice({ message: problem, tone: "error" });
+        return;
+      }
+      setEdges((current) => reconnectEdge(oldEdge, connection, current));
+    },
+    [edges, setEdges, setNotice],
+  );
 
   const addNode = useCallback(
     (type: WorkflowNodeType, position?: { x: number; y: number }) => {
@@ -317,7 +183,9 @@ export default function App() {
       const node: WorkflowNode = {
         id: `${type}-${crypto.randomUUID().slice(0, 8)}`,
         type: "workflow",
-        position: position ?? reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }),
+        position:
+          position ??
+          reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }),
         data: {
           label: item.label,
           description: item.description,
@@ -327,6 +195,7 @@ export default function App() {
       };
       setNodes((current) => [...current, node]);
       setSelectedNodeId(node.id);
+      setPanelMode("step");
     },
     [reactFlow, setNodes],
   );
@@ -341,14 +210,22 @@ export default function App() {
     [addNode, reactFlow],
   );
 
+  const selectNode = (id: string) => {
+    setSelectedNodeId(id);
+    setPanelMode("step");
+  };
+
   const updateSelectedNode = (updated: WorkflowNode) =>
     setNodes((current) => current.map((node) => (node.id === updated.id ? updated : node)));
 
   const deleteSelectedNode = () => {
     if (!selectedNodeId) return;
     setNodes((current) => current.filter((node) => node.id !== selectedNodeId));
-    setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
+    setEdges((current) =>
+      current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
+    );
     setSelectedNodeId(undefined);
+    setPanelMode("run");
   };
 
   const duplicateSelectedNode = () => {
@@ -367,33 +244,46 @@ export default function App() {
     if (running) return;
     setRunning(true);
     setLogs([]);
-    setRunPanelOpen(true);
+    setPanelMode("run");
     setSelectedNodeId(undefined);
     setLatestResult({ status: "queued" });
     setPendingApproval(undefined);
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
+
     try {
       const currentConnections = convexClient
         ? await convexClient.query(listConnectionsRef, {})
         : connections;
-      if (convexClient) setConnections(currentConnections);
+
+      // Fail before doing any work if a live step has no usable account.
       const unready = nodes.find((node) => {
-        const provider = node.data.nodeType === "slack" ? "slack" : ["gmailTrigger", "googleDoc"].includes(node.data.nodeType) ? "google" : undefined;
+        const provider =
+          node.data.nodeType === "slack"
+            ? "slack"
+            : ["gmailTrigger", "googleDoc"].includes(node.data.nodeType)
+              ? "google"
+              : undefined;
         if (!provider || node.data.config.executionMode !== "live") return false;
         const ref = String(node.data.config.connectionRef ?? "");
-        return !currentConnections.some((connection) => connection.provider === provider && connection.externalId === ref && connection.status === "active");
+        return !currentConnections.some(
+          (connection) =>
+            connection.provider === provider &&
+            connection.externalId === ref &&
+            connection.status === "active",
+        );
       });
       if (unready) {
-        setHubTab("connectors");
-        throw new Error(`${unready.data.label} needs an active connected account. Connect or reauthorize it first.`);
+        navigate("/connections");
+        throw new Error(`${unready.data.label} needs an active connected account.`);
       }
+
       if (convexClient) {
         const client = convexClient;
         const updatedAt = Date.now();
         await client.mutation(upsertWorkflowRef, {
           externalId: initial.id,
           name,
-          description: initial.description,
+          description,
           enabled,
           nodes: persistableNodes(nodes),
           edges,
@@ -405,7 +295,6 @@ export default function App() {
           trigger: "manual",
         });
         setLatestResult({ id: runId, status: "queued" });
-        setLogs([{ id: `queued-${runId}`, level: "info", message: "Run accepted by Convex.", timestamp: Date.now() }]);
 
         await new Promise<void>((resolve, reject) => {
           const watch = client.watchQuery(getRunRef, { runId });
@@ -414,31 +303,43 @@ export default function App() {
             try {
               const run = watch.localQueryResult();
               if (!run) return;
-              setLatestResult({ id: runId, status: run.status, output: run.output, error: run.error, steps: run.steps.map((step) => ({ id: step._id, ...step })) });
-              setLogs([
-                { id: `started-${runId}`, level: "info", message: `Run ${run.status}.`, timestamp: run.startedAt },
-                ...run.steps.map((step) => ({
-                  id: step._id,
-                  nodeId: step.nodeId,
-                  level: step.status === "failed" ? "error" as const : step.status === "completed" ? "success" as const : "info" as const,
-                  message: step.status === "waiting" ? `${step.nodeLabel} needs a decision` : `${step.nodeLabel} ${step.status}`,
-                  timestamp: step.completedAt ?? step.startedAt,
-                  output: step.output,
-                  explanation: step.error ?? (step.status === "waiting" ? "Review the generated document, then approve or reject below." : step.status === "completed" ? "This result is recorded in the run history." : "OpenWorkflow is working on this step."),
-                })),
-              ]);
+              setLatestResult({
+                id: runId,
+                status: run.status,
+                output: run.output,
+                error: run.error,
+                steps: run.steps.map((step) => ({ id: step._id, ...step })),
+              });
+
               const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
               if (waiting) {
                 const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
-                setPendingApproval({ backendRunId: runId, nodeId: waiting.nodeId, title: waiting.nodeLabel, prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"), input: waiting.input });
+                setPendingApproval({
+                  backendRunId: runId,
+                  nodeId: waiting.nodeId,
+                  title: waiting.nodeLabel,
+                  prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
+                  input: waiting.input,
+                });
               } else setPendingApproval(undefined);
+
               setNodes((current) =>
                 current.map((node) => {
                   const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
-                  const status = latest?.status === "completed" ? "success" : latest?.status === "failed" ? "error" : latest?.status === "waiting" ? "waiting" : latest ? "running" : "idle";
+                  const status =
+                    latest?.status === "completed"
+                      ? "success"
+                      : latest?.status === "failed"
+                        ? "error"
+                        : latest?.status === "waiting"
+                          ? "waiting"
+                          : latest
+                            ? "running"
+                            : "idle";
                   return { ...node, data: { ...node.data, status } };
                 }),
               );
+
               if (run.status === "completed" || run.status === "failed") {
                 unsubscribe();
                 if (run.status === "failed") reject(new Error(run.error ?? "Workflow failed."));
@@ -452,18 +353,26 @@ export default function App() {
         });
       } else {
         const demoRun = await runDemo(
-          { ...initial, name, enabled, nodes, edges, updatedAt: Date.now() },
+          { ...initial, name, description, enabled, nodes, edges, updatedAt: Date.now() },
           (log) => setLogs((current) => [...current, log]),
           (nodeId, status) =>
             setNodes((current) =>
-              current.map((node) => (node.id === nodeId ? { ...node, data: { ...node.data, status } } : node)),
-          ),
-          (request) => new Promise((resolve) => {
-            demoApprovalResolver.current = resolve;
-            setPendingApproval(request);
-          }),
+              current.map((node) =>
+                node.id === nodeId ? { ...node, data: { ...node.data, status } } : node,
+              ),
+            ),
+          (request) =>
+            new Promise((resolve) => {
+              demoApprovalResolver.current = resolve;
+              setPendingApproval(request);
+            }),
         );
-        setLatestResult({ id: demoRun.id, status: demoRun.status, output: demoRun.output, error: demoRun.error });
+        setLatestResult({
+          id: demoRun.id,
+          status: demoRun.status,
+          output: demoRun.output,
+          error: demoRun.error,
+        });
       }
     } catch (error) {
       void refreshConnections().catch(() => undefined);
@@ -472,15 +381,6 @@ export default function App() {
         status: "failed",
         error: error instanceof Error ? error.message : "Workflow failed.",
       }));
-      setLogs((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          level: "error",
-          message: error instanceof Error ? error.message : "Workflow failed.",
-          timestamp: Date.now(),
-        },
-      ]);
     } finally {
       setRunning(false);
       setPendingApproval(undefined);
@@ -493,71 +393,87 @@ export default function App() {
     setApprovalBusy(true);
     try {
       if (convexClient && pendingApproval.backendRunId) {
-        await convexClient.mutation(approveRunRef, { runId: pendingApproval.backendRunId, nodeId: pendingApproval.nodeId, approved, ...(note?.trim() ? { note: note.trim() } : {}) });
+        await convexClient.mutation(approveRunRef, {
+          runId: pendingApproval.backendRunId,
+          nodeId: pendingApproval.nodeId,
+          approved,
+          ...(note?.trim() ? { note: note.trim() } : {}),
+        });
       } else if (demoApprovalResolver.current) {
         demoApprovalResolver.current({ approved, ...(note?.trim() ? { note: note.trim() } : {}) });
         demoApprovalResolver.current = undefined;
       }
       setPendingApproval(undefined);
-      setNotice(approved ? "Approved — the workflow is continuing" : "Rejected — the run will stop safely");
-      window.setTimeout(() => setNotice(undefined), 2400);
+      setNotice({
+        message: approved ? "Approved — the workflow is continuing" : "Rejected — the run stops here",
+        tone: "info",
+      });
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not record the decision");
+      setNotice({
+        message: error instanceof Error ? error.message : "Could not record the decision",
+        tone: "error",
+      });
     } finally {
       setApprovalBusy(false);
     }
   };
 
   const restoreStarter = () => {
-    const starter = resetWorkflow();
+    const starter = structuredClone(STARTER_WORKFLOW);
     setName(starter.name);
+    setDescription(starter.description);
     setEnabled(starter.enabled);
     setNodes(starter.nodes);
     setEdges(starter.edges);
     setSelectedNodeId(undefined);
-    setLogs([]);
-    setNotice("Starter workflow restored");
-    window.setTimeout(() => setNotice(undefined), 2200);
-  };
-
-  const useInboxTemplate = () => {
-    restoreStarter();
-    setHubTab(undefined);
-    setNotice("Daily inbox brief template loaded");
+    setNotice({ message: "Starter workflow restored", tone: "info" });
   };
 
   return (
-    <main className="app-shell">
+    <div className="route">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark"><Workflow size={19} /></span>
-          <span>OpenWorkflow</span>
-          <span className="poc-badge">POC</span>
-        </div>
-        <div className="workflow-title">
+        <div className="topbar-title">
           <input value={name} onChange={(event) => setName(event.target.value)} aria-label="Workflow name" />
-          <span>{saved ? <><Check size={13} /> {convexClient ? "Saved to Convex" : "Saved locally"}</> : <><Save size={13} /> Saving…</>}</span>
+          <span className="save-state">
+            {saved ? (
+              <>
+                <Check size={12} /> Saved
+              </>
+            ) : (
+              <>
+                <Loader2 className="spin" size={12} /> Saving
+              </>
+            )}
+          </span>
         </div>
-        <div className="top-actions">
-          <div className="history-actions">
-            <button className="icon-button" disabled title="Undo"><Undo2 size={16} /></button>
-            <button className="icon-button" disabled title="Redo"><Redo2 size={16} /></button>
-          </div>
-          <button className="quiet-button" onClick={() => setRunPanelOpen(true)}><History size={15} /> Runs</button>
-          <button className="quiet-button" onClick={() => setHubTab("connectors")}><PlugZap size={15} /> Connectors</button>
-          <button className="icon-button help-button" onClick={() => setHubTab("help")} title="Help"><HelpCircle size={17} /></button>
-          <UserButton userProfileProps={{ additionalOAuthScopes: { google: GOOGLE_SCOPES } }} />
-          <label className="enable-control">
-            <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+
+        <div className="topbar-actions">
+          <button className="btn btn-ghost" onClick={restoreStarter} title="Restore the starter workflow">
+            <RotateCcw size={14} /> Reset
+          </button>
+          <label className="switch-inline">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(event) => setEnabled(event.target.checked)}
+            />
             <span>{enabled ? "Active" : "Draft"}</span>
           </label>
-          <button className="run-button" onClick={runWorkflow} disabled={running}><Play size={15} fill="currentColor" /> {running ? "Running…" : "Run workflow"}<ChevronDown size={14} /></button>
+          <button className="btn btn-primary" onClick={() => void runWorkflow()} disabled={running}>
+            {running ? <Loader2 className="spin" size={14} /> : <Play size={14} fill="currentColor" />}
+            {running ? "Running" : "Run workflow"}
+          </button>
         </div>
       </header>
 
       <div className="workspace">
-        <NodePalette onAdd={addNode} onOpenLibrary={() => setHubTab("templates")} />
-        <section className="canvas-wrap" onDrop={onDrop} onDragOver={(event) => event.preventDefault()}>
+        <NodePalette onAdd={addNode} />
+
+        <section
+          className="canvas"
+          onDrop={onDrop}
+          onDragOver={(event) => event.preventDefault()}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -569,51 +485,61 @@ export default function App() {
             edgesReconnectable
             connectionRadius={36}
             reconnectRadius={36}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => setSelectedNodeId(undefined)}
+            onNodeClick={(_, node) => selectNode(node.id)}
+            onPaneClick={() => {
+              setSelectedNodeId(undefined);
+              setPanelMode("run");
+            }}
             deleteKeyCode={["Backspace", "Delete"]}
             fitView
-            fitViewOptions={{ padding: 0.28 }}
+            fitViewOptions={{ padding: 0.26 }}
             minZoom={0.35}
             maxZoom={1.6}
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#2b303c" />
+            <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#1f1f23" />
             <Controls showInteractive={false} />
-            <MiniMap
-              nodeColor={(node) => catalogByType[(node as WorkflowNode).data.nodeType].accent}
-              maskColor="rgba(8, 10, 15, .78)"
-            />
-            <div className="canvas-status">
-              <Cloud size={14} />
-              {convexClient ? "Convex connected" : "Local demo mode"}
-            </div>
+            <MiniMap nodeColor="#3a3a42" maskColor="rgba(10, 10, 11, .8)" pannable />
           </ReactFlow>
-          <div className="canvas-hint"><Sparkles size={14} /> Each step receives the result from the step before it</div>
-          {runPanelOpen && <RunPanel logs={logs} running={running} pendingApproval={pendingApproval} approvalBusy={approvalBusy} onApproval={(approved, note) => void decideApproval(approved, note)} onClose={() => setRunPanelOpen(false)} />}
+          <div className="canvas-note">Each step receives the result from the step before it</div>
         </section>
-        {selectedNode ? (
-          <Inspector
-            node={selectedNode}
-            onChange={updateSelectedNode}
-            onClose={() => setSelectedNodeId(undefined)}
-            onDelete={deleteSelectedNode}
-            onDuplicate={duplicateSelectedNode}
-            connections={connections}
-            onOpenConnectors={() => setHubTab("connectors")}
-          />
-        ) : latestResult ? (
-          <OutputPanel result={latestResult} onClose={() => setLatestResult(undefined)} />
-        ) : (
-          <aside className="empty-inspector panel">
-            <div className="empty-symbol"><Workflow size={25} /></div>
-            <strong>Select a step</strong>
-            <p>Choose a card to see what it accomplishes and set it up in plain language.</p>
-            <button onClick={restoreStarter}><RotateCcw size={14} /> Restore starter</button>
-          </aside>
-        )}
+
+        <SidePanel
+          mode={panelMode}
+          onModeChange={setPanelMode}
+          stepLabel="Step"
+          runBadge={running ? <span className="dot dot-running" /> : undefined}
+          step={
+            selectedNode ? (
+              <Inspector
+                node={selectedNode}
+                onChange={updateSelectedNode}
+                onDelete={deleteSelectedNode}
+                onDuplicate={duplicateSelectedNode}
+                connections={connections}
+                onOpenConnectors={() => navigate("/connections")}
+              />
+            ) : (
+              <div className="tx-empty">
+                <p className="t-heading">No step selected</p>
+                <p className="t-small t-muted">
+                  Choose a card on the canvas to rename it, change what it does, or pick the account
+                  it uses.
+                </p>
+              </div>
+            )
+          }
+          run={
+            <RunTranscript
+              result={latestResult}
+              pendingApproval={pendingApproval}
+              approvalBusy={approvalBusy}
+              onApproval={(approved, note) => void decideApproval(approved, note)}
+              onRun={() => void runWorkflow()}
+              running={running}
+            />
+          }
+        />
       </div>
-      {notice && <div className="toast"><Check size={15} /> {notice}</div>}
-      {hubTab && <ResourceHub initialTab={hubTab} onClose={() => setHubTab(undefined)} onUseInboxTemplate={useInboxTemplate} connections={connections} connectionBusy={connectionBusy} onConnectGoogle={() => void connectGoogle()} onDisconnectGoogle={(externalId) => void disconnectGoogle(externalId)} onConnectSlack={() => void connectSlack()} onDisconnectSlack={(externalId) => void disconnectSlack(externalId)} />}
-    </main>
+    </div>
   );
 }

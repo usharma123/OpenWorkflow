@@ -20,6 +20,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_owner_external_id", ["ownerKey", "externalId"])
+    .index("by_owner_updated_at", ["ownerKey", "updatedAt"])
     .index("by_webhook_slug_secret", ["webhookSlug", "webhookSecret"])
     .index("by_enabled", ["enabled"]),
 
@@ -61,6 +62,7 @@ export default defineSchema({
       v.literal("skipped"),
     ),
     input: v.optional(v.any()),
+    partialOutput: v.optional(v.string()),
     output: v.optional(v.any()),
     error: v.optional(v.string()),
     startedAt: v.number(),

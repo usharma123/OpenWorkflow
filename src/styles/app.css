@@ -1,0 +1,442 @@
+/* App shell, navigation rail, top bar, and the non-canvas routes. */
+
+.app {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ---- Navigation rail ----------------------------------------------------- */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.rail-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.rail-link {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.rail-link:hover {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.rail-link.is-active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rail-link.is-active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--ink-10);
+}
+
+.rail-foot {
+  margin-top: auto;
+  display: grid;
+  place-items: center;
+  gap: 6px;
+}
+
+/* Tooltip on rail icons, so the rail can stay icon-only. */
+.rail-link[data-label]::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fast) var(--ease);
+  z-index: 30;
+}
+
+.rail-link:hover::after {
+  opacity: 1;
+}
+
+/* ---- Route frame --------------------------------------------------------- */
+
+.route {
+  display: grid;
+  grid-template-rows: 52px 1fr;
+  min-width: 0;
+  min-height: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.topbar-title input {
+  width: 260px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  outline: 0;
+}
+
+.topbar-title input:hover {
+  border-color: var(--border);
+}
+
+.topbar-title input:focus {
+  border-color: var(--ink-7);
+  background: var(--ink-0);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.switch-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.switch-inline input {
+  accent-color: var(--ink-9);
+}
+
+/* Expanded run inside the history list. */
+.run-detail {
+  margin: -2px 0 8px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--surface);
+}
+
+.run-detail .tx {
+  height: auto;
+  max-height: 520px;
+}
+
+.route-body {
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 232px minmax(360px, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- Content pages ------------------------------------------------------- */
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 32px 64px;
+}
+
+.page-head {
+  margin-bottom: 28px;
+}
+
+.page-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.page-head h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+}
+
+.page-head p {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.page-section {
+  margin-top: 32px;
+}
+
+.page-section > .t-eyebrow {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.page-filter {
+  display: grid;
+  gap: 7px;
+  max-width: 320px;
+  margin-bottom: 20px;
+}
+
+.stack {
+  display: grid;
+  gap: 8px;
+}
+
+/* Row used by workflow list, run history, and connection lists. */
+.row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+a.row:hover,
+button.row:hover,
+.workflow-row:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.row-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--ink-0);
+  color: var(--text-muted);
+}
+
+.row-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.row-copy small {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0;
+}
+
+.workflow-row-main {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 0 12px 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.workflow-actions {
+  padding-right: 12px;
+}
+
+.workflow-name-input {
+  width: min(360px, 100%);
+}
+
+.danger-icon:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.empty-state {
+  padding: 40px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.note strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ---- Toast --------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  z-index: 60;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-size: 13px;
+  animation: toast-in 180ms var(--ease);
+}
+
+.toast svg {
+  flex: 0 0 auto;
+}
+
+.toast.is-error {
+  border-color: var(--danger-border);
+  background: var(--danger-surface);
+  color: var(--danger-text);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}
+
+/* ---- Responsive ---------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .workspace {
+    grid-template-columns: 200px minmax(300px, 1fr) auto;
+  }
+}
+
+@media (max-width: 940px) {
+  .workspace {
+    grid-template-columns: minmax(280px, 1fr) auto;
+  }
+  .palette {
+    display: none;
+  }
+}
