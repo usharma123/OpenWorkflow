@@ -276,7 +276,6 @@ a.artifact-row:hover { border-color: #344c6b; background: #0d131c; }
 .setup-card p { color: #a2a8b4; font-size: 12px; line-height: 1.65; }
 .setup-card code { padding: 2px 5px; border-radius: 4px; color: #c4b5fd; background: #211833; font-family: DM Mono, monospace; }
 .setup-card small, .auth-loading { color: #737b89; font-size: 10px; line-height: 1.6; }
-.top-actions > .cl-userButton-root { display: flex; }
 .connection-field { align-items: stretch; }
 .manage-connection { align-self: flex-start; padding: 0; border: 0; color: #a78bfa; background: transparent; font-size: 8px; cursor: pointer; }
 .manage-connection:hover { color: #c4b5fd; }
