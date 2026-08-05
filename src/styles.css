@@ -271,10 +271,10 @@ a.artifact-row:hover { border-color: #344c6b; background: #0d131c; }
 /* Authentication and real connection management. */
 .auth-shell { min-height: 100vh; display: grid; place-items: center; padding: 32px; background: radial-gradient(circle at 50% 20%, #1a1330 0, #090b10 48%); }
 .setup-card { width: min(520px, 100%); padding: 34px; border: 1px solid #36304a; border-radius: 16px; background: rgba(14, 16, 23, .94); box-shadow: 0 26px 80px rgba(0,0,0,.45); }
-.setup-kicker { color: #a78bfa; text-transform: uppercase; letter-spacing: .12em; font: 600 9px DM Mono, monospace; }
+.setup-kicker { color: #a78bfa; text-transform: uppercase; letter-spacing: .12em; font: 600 9px "DM Mono", monospace; }
 .setup-card h1 { margin: 10px 0 9px; font-size: 28px; }
 .setup-card p { color: #a2a8b4; font-size: 12px; line-height: 1.65; }
-.setup-card code { padding: 2px 5px; border-radius: 4px; color: #c4b5fd; background: #211833; font-family: DM Mono, monospace; }
+.setup-card code { padding: 2px 5px; border-radius: 4px; color: #c4b5fd; background: #211833; font-family: "DM Mono", monospace; }
 .setup-card small, .auth-loading { color: #737b89; font-size: 10px; line-height: 1.6; }
 .connection-field { align-items: stretch; }
 .manage-connection { align-self: flex-start; padding: 0; border: 0; color: #a78bfa; background: transparent; font-size: 8px; cursor: pointer; }
@@ -291,15 +291,15 @@ a.artifact-row:hover { border-color: #344c6b; background: #0d131c; }
 .connected-account > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .connected-account strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .connected-account small { color: #708078; font-size: 8px; }
-.connected-account p { grid-column: 1 / -1; margin: 0; color: #6f7785; font: 400 7px/1.6 DM Mono, monospace; overflow-wrap: anywhere; }
-.connection-status { align-self: start; padding: 3px 6px; border-radius: 5px; text-transform: uppercase; font: 600 7px DM Mono, monospace; }
+.connected-account p { grid-column: 1 / -1; margin: 0; color: #6f7785; font: 400 7px/1.6 "DM Mono", monospace; overflow-wrap: anywhere; }
+.connection-status { align-self: start; padding: 3px 6px; border-radius: 5px; text-transform: uppercase; font: 600 7px "DM Mono", monospace; }
 .connection-status.active { color: #86efac; background: #173321; }
 .connection-status.needs_reauth { color: #fcd34d; background: #3a2b12; }
 .connection-actions { grid-column: 1 / -1; display: flex; gap: 7px; }
 .connection-actions button { padding: 5px 7px; border: 1px solid #34483a; border-radius: 5px; color: #b9c9be; background: #121f17; font-size: 8px; cursor: pointer; }
 .connection-actions .disconnect { color: #fda4af; border-color: #55303a; background: #211419; }
 .no-connection { margin: 11px 0 0 49px; color: #687180; font-size: 8px; line-height: 1.55; }
-.unavailable-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 12px; }
+.unavailable-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 7px; margin-top: 12px; }
 .unavailable-grid article { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px dashed #2d333e; border-radius: 8px; color: #687180; background: #0d1016; }
 .unavailable-grid article > span { display: flex; flex-direction: column; gap: 3px; }
 .unavailable-grid strong { color: #9299a6; font-size: 9px; }
