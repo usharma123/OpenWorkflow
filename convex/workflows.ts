@@ -1,6 +1,7 @@
 import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requirePrincipal } from "./auth";
+import { validateWorkflowGraph } from "./policies";
 
 const workflowArgs = {
   externalId: v.string(),
@@ -41,6 +42,7 @@ export const upsert = mutation({
   args: workflowArgs,
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
+    validateWorkflowGraph(args.nodes, args.edges);
     const existing = await ctx.db
       .query("workflows")
       .withIndex("by_owner_external_id", (q) =>

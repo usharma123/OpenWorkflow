@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { applyApprovalDecision, hasRequiredScopes, ownerKeyFor } from "../convex/policies";
+import { applyApprovalDecision, hasRequiredScopes, ownerKeyFor, validateWorkflowGraph } from "../convex/policies";
+import { GOOGLE_SCOPES, hasRequiredGoogleScopes } from "../src/lib/googleAuth";
 
 describe("tenant ownership", () => {
   test("users without an active organization have distinct boundaries", () => {
@@ -23,6 +24,11 @@ describe("connector scopes", () => {
     expect(hasRequiredScopes(["chat:write,channels:read"], ["chat:write"])).toBe(true);
     expect(hasRequiredScopes(["chat:write channels:read"], ["chat:write"])).toBe(true);
   });
+
+  test("reuses an existing Clerk Google grant only when every required scope is present", () => {
+    expect(hasRequiredGoogleScopes(GOOGLE_SCOPES.join(" "))).toBe(true);
+    expect(hasRequiredGoogleScopes(GOOGLE_SCOPES.slice(0, 2).join(" "))).toBe(false);
+  });
 });
 
 describe("approval gate", () => {
@@ -35,5 +41,29 @@ describe("approval gate", () => {
       documentUrl: "https://example.test",
       approval: { approved: true, decidedAt: 123 },
     });
+  });
+});
+
+describe("saved workflow graph validation", () => {
+  const nodes = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+  test("accepts a valid directed acyclic graph", () => {
+    expect(() => validateWorkflowGraph(nodes, [
+      { source: "a", target: "b" },
+      { source: "a", target: "c" },
+    ])).not.toThrow();
+  });
+
+  test("rejects dangling, duplicate, and cyclic connections", () => {
+    expect(() => validateWorkflowGraph(nodes, [{ source: "a", target: "missing" }])).toThrow("existing workflow steps");
+    expect(() => validateWorkflowGraph(nodes, [
+      { source: "a", target: "b" },
+      { source: "a", target: "b" },
+    ])).toThrow("Duplicate");
+    expect(() => validateWorkflowGraph(nodes, [
+      { source: "a", target: "b" },
+      { source: "b", target: "c" },
+      { source: "c", target: "a" },
+    ])).toThrow("loops");
   });
 });

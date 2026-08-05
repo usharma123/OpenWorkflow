@@ -5,10 +5,12 @@ import {
   Controls,
   MiniMap,
   ReactFlow,
+  reconnectEdge,
   useEdgesState,
   useNodesState,
   useReactFlow,
   type Connection,
+  type Edge,
 } from "@xyflow/react";
 import {
   Check,
@@ -49,15 +51,12 @@ import {
   type ConnectionMetadata,
 } from "./lib/convexClient";
 import { runDemo } from "./lib/demoRunner";
+import { GOOGLE_SCOPES, hasRequiredGoogleScopes } from "./lib/googleAuth";
 import { loadWorkflow, resetWorkflow, saveWorkflow } from "./lib/storage";
+import { validateWorkflowConnection } from "./lib/workflowConnections";
 import type { LatestRunResult, PendingApproval, RunLog, WorkflowNode, WorkflowNodeType } from "./types";
 
 const nodeTypes = { workflow: WorkflowNodeComponent };
-const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/documents",
-  "https://www.googleapis.com/auth/drive.file",
-];
 const GOOGLE_CONNECTION_PENDING_KEY = "openworkflow.googleConnectionPending";
 
 function connectionError(error: unknown, fallback: string): string {
@@ -113,6 +112,7 @@ export default function App() {
   const [connectionBusy, setConnectionBusy] = useState<string>();
   const reactFlow = useReactFlow<WorkflowNode>();
   const saveTimer = useRef<number | undefined>(undefined);
+  const noticeTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
   const demoApprovalResolver = useRef<((decision: { approved: boolean; note?: string }) => void) | undefined>(undefined);
 
@@ -162,11 +162,21 @@ export default function App() {
   }, [refreshConnections]);
 
   const connectGoogle = async () => {
-    if (!user) return;
+    if (!user || !convexClient) return;
     setConnectionBusy("google");
     try {
-      const redirectUrl = `${window.location.origin}/sso-callback`;
       const existing = user.externalAccounts.find((account) => account.provider === "google");
+      if (existing && hasRequiredGoogleScopes(existing.approvedScopes)) {
+        const result = await convexClient.action(syncGoogleRef, {});
+        await refreshConnections();
+        setNotice(result.count > 0
+          ? "Google Workspace connected"
+          : "Google authorization did not return an account. Open Connectors and reconnect.");
+        setConnectionBusy(undefined);
+        return;
+      }
+
+      const redirectUrl = existing ? window.location.href : `${window.location.origin}/sso-callback`;
       const account = existing
         ? await existing.reauthorize({ additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" })
         : await createGoogleAccount({ strategy: "oauth_google", additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" });
@@ -275,10 +285,31 @@ export default function App() {
     return () => window.clearTimeout(saveTimer.current);
   }, [backendLoaded, edges, enabled, initial, name, nodes]);
 
-  const onConnect = useCallback(
-    (connection: Connection) => setEdges((current) => addEdge({ ...connection, animated: true }, current)),
-    [setEdges],
-  );
+  const showTemporaryNotice = useCallback((message: string) => {
+    window.clearTimeout(noticeTimer.current);
+    setNotice(message);
+    noticeTimer.current = window.setTimeout(() => setNotice(undefined), 2800);
+  }, []);
+
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
+
+  const onConnect = useCallback((connection: Connection) => {
+    const problem = validateWorkflowConnection(connection, edges);
+    if (problem) {
+      showTemporaryNotice(problem);
+      return;
+    }
+    setEdges((current) => addEdge({ ...connection, animated: true }, current));
+  }, [edges, setEdges, showTemporaryNotice]);
+
+  const onReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
+    const problem = validateWorkflowConnection(connection, edges, oldEdge.id);
+    if (problem) {
+      showTemporaryNotice(problem);
+      return;
+    }
+    setEdges((current) => reconnectEdge(oldEdge, connection, current));
+  }, [edges, setEdges, showTemporaryNotice]);
 
   const addNode = useCallback(
     (type: WorkflowNodeType, position?: { x: number; y: number }) => {
@@ -534,6 +565,10 @@ export default function App() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onReconnect={onReconnect}
+            edgesReconnectable
+            connectionRadius={36}
+            reconnectRadius={36}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
             onPaneClick={() => setSelectedNodeId(undefined)}
             deleteKeyCode={["Backspace", "Delete"]}
