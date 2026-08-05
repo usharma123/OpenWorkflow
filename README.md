@@ -135,7 +135,7 @@ The key stays in Convex. Browser safe demo mode does not call OpenRouter; Convex
 
 Vercel serves the frontend; Convex owns durable execution and secrets.
 
-1. Add `VITE_CLERK_PUBLISHABLE_KEY` to the Vercel project. Configure two environment-scoped values named `CONVEX_DEPLOY_KEY`: a production deploy key scoped only to **Production**, and a Convex project preview deploy key scoped only to **Preview**. Convex rejects production deploy keys in preview builds by design.
+1. Add `VITE_CLERK_PUBLISHABLE_KEY` to the Vercel project. Configure two environment-scoped values named `CONVEX_DEPLOY_KEY`: a production deploy key scoped only to **Production**, and a Convex project preview deploy key scoped only to **Preview**. Convex rejects production deploy keys in preview builds by design. In Convex Project Settings, add `CLERK_JWT_ISSUER_DOMAIN` as a **Preview** default environment variable so newly created preview deployments can compile `convex/auth.config.ts`.
 2. Use the checked-in Bun install and build settings. `vercel.json` deploys Convex and injects `VITE_CONVEX_URL` for the Vite build.
 3. Set `APP_URL` on the production Convex deployment to the canonical HTTPS Vercel domain.
 4. Use production Clerk, Google, Slack, and OpenRouter values in the production Convex deployment.
