@@ -1,5 +1,5 @@
 import { ArrowRight, CalendarDays, Check, FileText, HelpCircle, LockKeyhole, Mail, MessageSquare, PlugZap, ShieldCheck, Sparkles, Users, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WORKFLOW_TEMPLATES } from "../catalog";
 import type { ConnectionMetadata } from "../lib/convexClient";
 
@@ -17,6 +17,11 @@ interface ResourceHubProps {
   onDisconnectSlack: (externalId: string) => void;
 }
 const scopeLabel = (scope: string) => scope.replace("https://www.googleapis.com/auth/", "");
+const statusLabel: Record<ConnectionMetadata["status"], string> = {
+  active: "Connected",
+  needs_reauth: "Reconnect required",
+  disabled: "Disconnected",
+};
 
 function ConnectionCard({ connection, busy, onReconnect, onDisconnect }: {
   connection: ConnectionMetadata;
@@ -25,17 +30,23 @@ function ConnectionCard({ connection, busy, onReconnect, onDisconnect }: {
   onDisconnect: () => void;
 }) {
   const needsAttention = connection.status === "needs_reauth";
+  const confirmDisconnect = () => {
+    const consequence = connection.provider === "google"
+      ? "This disables Google for OpenWorkflow but keeps the account available for sign-in."
+      : "This disables the workspace and attempts to revoke its Slack token.";
+    if (window.confirm(`Disconnect ${connection.ownerLabel}? ${consequence}`)) onDisconnect();
+  };
   return (
     <article className={`connected-account ${needsAttention ? "needs-reauth" : ""}`}>
       <div>
         <strong>{connection.ownerLabel}</strong>
         <small>{connection.displayName}</small>
       </div>
-      <span className={`connection-status ${connection.status}`}>{connection.status === "needs_reauth" ? "Reconnect required" : connection.status}</span>
+      <span className={`connection-status ${connection.status}`}>{statusLabel[connection.status]}</span>
       <p>{connection.scopes.length ? connection.scopes.map(scopeLabel).join(" · ") : "No connector scopes recorded"}</p>
       <div className="connection-actions">
         <button disabled={busy} onClick={onReconnect}>{needsAttention ? "Reauthorize" : "Reconnect"}</button>
-        <button className="disconnect" disabled={busy} onClick={onDisconnect}>Disconnect</button>
+        <button className="disconnect" disabled={busy} onClick={confirmDisconnect}>Disconnect</button>
       </div>
     </article>
   );
@@ -43,11 +54,26 @@ function ConnectionCard({ connection, busy, onReconnect, onDisconnect }: {
 
 export function ResourceHub(props: ResourceHubProps) {
   const [tab, setTab] = useState<HubTab>(props.initialTab ?? "templates");
+  const dialogRef = useRef<HTMLElement>(null);
   const google = props.connections.filter((connection) => connection.provider === "google" && connection.status !== "disabled");
   const slack = props.connections.filter((connection) => connection.provider === "slack" && connection.status !== "disabled");
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") props.onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [props.onClose]);
+
   return (
     <div className="hub-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && props.onClose()}>
-      <section className="resource-hub" role="dialog" aria-modal="true" aria-label="Templates, connectors, and help">
+      <section ref={dialogRef} tabIndex={-1} className="resource-hub" role="dialog" aria-modal="true" aria-label="Templates, connectors, and help">
         <header className="hub-header">
           <div><span className="hub-mark"><Sparkles size={18} /></span><span><strong>OpenWorkflow library</strong><small>Start quickly, then make it yours</small></span></div>
           <button className="icon-button" onClick={props.onClose} aria-label="Close library"><X size={18} /></button>
