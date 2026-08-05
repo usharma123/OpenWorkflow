@@ -26,6 +26,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { UserButton, useReverification, useUser } from "@clerk/react";
 import { catalogByType } from "./catalog";
 import { Inspector } from "./components/Inspector";
 import { NodePalette } from "./components/NodePalette";
@@ -36,16 +37,40 @@ import { WorkflowNodeComponent } from "./components/WorkflowNode";
 import {
   convexClient,
   approveRunRef,
+  disconnectGoogleRef,
+  disconnectSlackRef,
   getRunRef,
   getWorkflowRef,
+  listConnectionsRef,
+  startSlackOAuthRef,
   startRunRef,
+  syncGoogleRef,
   upsertWorkflowRef,
+  type ConnectionMetadata,
 } from "./lib/convexClient";
 import { runDemo } from "./lib/demoRunner";
 import { loadWorkflow, resetWorkflow, saveWorkflow } from "./lib/storage";
 import type { LatestRunResult, PendingApproval, RunLog, WorkflowNode, WorkflowNodeType } from "./types";
 
 const nodeTypes = { workflow: WorkflowNodeComponent };
+const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/drive.file",
+];
+
+function connectionError(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  const message = error.message;
+  if (message.includes("Slack OAuth is not configured by the administrator")) {
+    return "Slack OAuth is not configured yet. Ask an administrator to add the Slack app credentials and encryption key.";
+  }
+  if (message.includes("Google") && (message.includes("scope") || message.includes("reauthor"))) {
+    return "Google needs to be reauthorized with Gmail, Docs, and Drive access. Open Connectors and reconnect the account.";
+  }
+  const serverMessage = message.match(/Uncaught Error:\s*([^\n]+)/)?.[1];
+  return serverMessage ?? message;
+}
 
 function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
   return nodes.map((node) => {
@@ -60,6 +85,7 @@ function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
 }
 
 export default function App() {
+  const { user } = useUser();
   const initial = useMemo(() => loadWorkflow(), []);
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
@@ -76,12 +102,103 @@ export default function App() {
   const [pendingApproval, setPendingApproval] = useState<PendingApproval>();
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [backendLoaded, setBackendLoaded] = useState(!convexClient);
+  const [connections, setConnections] = useState<ConnectionMetadata[]>([]);
+  const [connectionBusy, setConnectionBusy] = useState<string>();
   const reactFlow = useReactFlow<WorkflowNode>();
   const saveTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
   const demoApprovalResolver = useRef<((decision: { approved: boolean; note?: string }) => void) | undefined>(undefined);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
+
+  const createGoogleAccount = useReverification(
+    (args: Parameters<NonNullable<typeof user>["createExternalAccount"]>[0]) => user!.createExternalAccount(args),
+  );
+
+  const refreshConnections = useCallback(async () => {
+    if (!convexClient) return;
+    setConnections(await convexClient.query(listConnectionsRef, {}));
+  }, []);
+
+  useEffect(() => {
+    void refreshConnections().catch(() => undefined);
+  }, [refreshConnections]);
+
+  useEffect(() => {
+    if (!convexClient) return;
+    const params = new URLSearchParams(window.location.search);
+    const integration = params.get("integration");
+    const status = params.get("status");
+    if (!integration) return;
+    const detail = params.get("detail");
+    window.history.replaceState({}, "", window.location.pathname);
+    if (integration === "google" && status === "connected") {
+      setConnectionBusy("google");
+      void convexClient.action(syncGoogleRef, {}).then(refreshConnections).then(() => setNotice("Google Workspace connected")).catch((error) => setNotice(connectionError(error, "Google connection could not be synchronized"))).finally(() => setConnectionBusy(undefined));
+    } else if (integration === "slack" && status === "connected") {
+      void refreshConnections().then(() => setNotice("Slack workspace connected"));
+    } else {
+      setNotice(detail || `${integration === "slack" ? "Slack" : "Google"} connection was not completed`);
+    }
+  }, [refreshConnections]);
+
+  const connectGoogle = async () => {
+    if (!user) return;
+    setConnectionBusy("google");
+    try {
+      const redirectUrl = `${window.location.origin}/sso-callback`;
+      const existing = user.externalAccounts.find((account) => account.provider === "google");
+      const account = existing
+        ? await existing.reauthorize({ additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" })
+        : await createGoogleAccount({ strategy: "oauth_google", additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" });
+      const verificationUrl = account?.verification?.externalVerificationRedirectURL;
+      if (!verificationUrl) throw new Error("Clerk did not return a Google authorization URL.");
+      window.location.assign(verificationUrl.href);
+    } catch (error) {
+      setConnectionBusy(undefined);
+      setNotice(connectionError(error, "Could not start Google authorization"));
+    }
+  };
+
+  const disconnectGoogle = async (externalId: string) => {
+    if (!convexClient) return;
+    setConnectionBusy(externalId);
+    try {
+      await convexClient.action(disconnectGoogleRef, { externalId });
+      await refreshConnections();
+      setNotice("Google Workspace disconnected");
+    } catch (error) {
+      setNotice(connectionError(error, "Could not disconnect Google"));
+    } finally {
+      setConnectionBusy(undefined);
+    }
+  };
+
+  const connectSlack = async () => {
+    if (!convexClient) return;
+    setConnectionBusy("slack");
+    try {
+      const authorizeUrl = await convexClient.action(startSlackOAuthRef, { returnUrl: window.location.href });
+      window.location.assign(authorizeUrl);
+    } catch (error) {
+      setConnectionBusy(undefined);
+      setNotice(connectionError(error, "Could not start Slack authorization"));
+    }
+  };
+
+  const disconnectSlack = async (externalId: string) => {
+    if (!convexClient) return;
+    setConnectionBusy(externalId);
+    try {
+      const result = await convexClient.action(disconnectSlackRef, { externalId });
+      await refreshConnections();
+      setNotice(result.revoked ? "Slack workspace disconnected and token revoked" : "Slack disconnected locally; an administrator should verify remote revocation");
+    } catch (error) {
+      setNotice(connectionError(error, "Could not disconnect Slack"));
+    } finally {
+      setConnectionBusy(undefined);
+    }
+  };
 
   useEffect(() => {
     if (!convexClient || hydratedOnce.current) return;
@@ -204,6 +321,16 @@ export default function App() {
     setPendingApproval(undefined);
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
     try {
+      const unready = nodes.find((node) => {
+        const provider = node.data.nodeType === "slack" ? "slack" : ["gmailTrigger", "googleDoc"].includes(node.data.nodeType) ? "google" : undefined;
+        if (!provider || node.data.config.executionMode !== "live") return false;
+        const ref = String(node.data.config.connectionRef ?? "");
+        return !connections.some((connection) => connection.provider === provider && connection.externalId === ref && connection.status === "active");
+      });
+      if (unready) {
+        setHubTab("connectors");
+        throw new Error(`${unready.data.label} needs an active connected account. Connect or reauthorize it first.`);
+      }
       if (convexClient) {
         const client = convexClient;
         const updatedAt = Date.now();
@@ -283,6 +410,7 @@ export default function App() {
         setLatestResult({ id: demoRun.id, status: demoRun.status, output: demoRun.output, error: demoRun.error });
       }
     } catch (error) {
+      void refreshConnections().catch(() => undefined);
       setLatestResult((current) => ({
         ...current,
         status: "failed",
@@ -362,6 +490,7 @@ export default function App() {
           <button className="quiet-button" onClick={() => setRunPanelOpen(true)}><History size={15} /> Runs</button>
           <button className="quiet-button" onClick={() => setHubTab("connectors")}><PlugZap size={15} /> Connectors</button>
           <button className="icon-button help-button" onClick={() => setHubTab("help")} title="Help"><HelpCircle size={17} /></button>
+          <UserButton userProfileProps={{ additionalOAuthScopes: { google: GOOGLE_SCOPES } }} />
           <label className="enable-control">
             <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
             <span>{enabled ? "Active" : "Draft"}</span>
@@ -409,6 +538,8 @@ export default function App() {
             onClose={() => setSelectedNodeId(undefined)}
             onDelete={deleteSelectedNode}
             onDuplicate={duplicateSelectedNode}
+            connections={connections}
+            onOpenConnectors={() => setHubTab("connectors")}
           />
         ) : latestResult ? (
           <OutputPanel result={latestResult} onClose={() => setLatestResult(undefined)} />
@@ -422,7 +553,7 @@ export default function App() {
         )}
       </div>
       {notice && <div className="toast"><Check size={15} /> {notice}</div>}
-      {hubTab && <ResourceHub initialTab={hubTab} onClose={() => setHubTab(undefined)} onUseInboxTemplate={useInboxTemplate} />}
+      {hubTab && <ResourceHub initialTab={hubTab} onClose={() => setHubTab(undefined)} onUseInboxTemplate={useInboxTemplate} connections={connections} connectionBusy={connectionBusy} onConnectGoogle={() => void connectGoogle()} onDisconnectGoogle={(externalId) => void disconnectGoogle(externalId)} onConnectSlack={() => void connectSlack()} onDisconnectSlack={(externalId) => void disconnectSlack(externalId)} />}
     </main>
   );
 }

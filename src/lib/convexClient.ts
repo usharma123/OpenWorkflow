@@ -35,6 +35,20 @@ export interface StoredRun {
   steps: StoredStepRun[];
 }
 
+export interface ConnectionMetadata {
+  _id: string;
+  externalId: string;
+  provider: "google" | "slack" | "microsoft";
+  displayName: string;
+  ownerLabel: string;
+  externalAccountId: string;
+  scopes: string[];
+  status: "active" | "needs_reauth" | "disabled";
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt?: number;
+}
+
 export const getWorkflowRef = makeFunctionReference<
   "query",
   { externalId: string },
@@ -68,3 +82,9 @@ export const approveRunRef = makeFunctionReference<
   { runId: string; nodeId: string; approved: boolean; note?: string },
   null
 >("runs:approve");
+
+export const listConnectionsRef = makeFunctionReference<"query", {}, ConnectionMetadata[]>("connections:list");
+export const syncGoogleRef = makeFunctionReference<"action", {}, { count: number }>("connectionActions:syncGoogle");
+export const disconnectGoogleRef = makeFunctionReference<"action", { externalId: string }, null>("connectionActions:disconnectGoogle");
+export const startSlackOAuthRef = makeFunctionReference<"action", { returnUrl?: string }, string>("connectionActions:startSlackOAuth");
+export const disconnectSlackRef = makeFunctionReference<"action", { externalId: string }, { revoked: boolean }>("connectionActions:disconnectSlack");
