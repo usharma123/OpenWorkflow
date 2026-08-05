@@ -14,12 +14,14 @@ describe("tenant ownership", () => {
 
 describe("connector scopes", () => {
   test("requires every Google scope", () => {
-    const granted = ["gmail.readonly", "documents"];
-    expect(hasRequiredScopes(granted, ["gmail.readonly", "documents", "drive.file"])).toBe(false);
+    const required = ["gmail.readonly", "documents", "drive.file"];
+    expect(hasRequiredScopes(["gmail.readonly", "documents"], required)).toBe(false);
+    expect(hasRequiredScopes(required, required)).toBe(true);
   });
 
   test("accepts comma- and space-delimited provider scope values", () => {
     expect(hasRequiredScopes(["chat:write,channels:read"], ["chat:write"])).toBe(true);
+    expect(hasRequiredScopes(["chat:write channels:read"], ["chat:write"])).toBe(true);
   });
 });
 
@@ -35,4 +37,3 @@ describe("approval gate", () => {
     });
   });
 });
-
