@@ -1,7 +1,6 @@
 import {
   Bot,
   Braces,
-  CheckCircle2,
   Clock3,
   GitBranch,
   Globe2,
@@ -42,16 +41,9 @@ const GLYPHS: Record<WorkflowNodeType, LucideIcon> = {
   output: Send,
 };
 
-export function hasBrandMark(type: WorkflowNodeType): boolean {
-  return type in BRAND_MARKS;
-}
-
 export function NodeMark({ type, size = 18 }: { type: WorkflowNodeType; size?: number }) {
   const Brand = BRAND_MARKS[type];
   if (Brand) return <Brand size={size} />;
   const Glyph = GLYPHS[type];
   return <Glyph size={size} strokeWidth={1.6} />;
 }
-
-export const NODE_ICONS = GLYPHS;
-export { CheckCircle2 };

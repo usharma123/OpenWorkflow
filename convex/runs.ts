@@ -11,7 +11,11 @@ export const listForWorkflow = query({
     const workflow = await ctx.db.get(workflowId);
     if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
     const runs = await ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).order("desc").take(25);
-    return Promise.all(runs.filter((run) => run.ownerKey === principal.ownerKey).map(async (run) => ({
+    const ownedRuns = runs.reduce<typeof runs>((owned, run) => {
+      if (run.ownerKey === principal.ownerKey) owned.push(run);
+      return owned;
+    }, []);
+    return Promise.all(ownedRuns.map(async (run) => ({
       ...run,
       steps: await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
     })));

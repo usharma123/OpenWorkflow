@@ -67,14 +67,16 @@ export const upsert = mutation({
       }
     }
     if (webhookSlugs.size > 1) throw new Error("A workflow can expose only one webhook URL.");
-    const googleOwners = new Set<string>();
-    for (const externalId of googleConnectionRefs) {
-      const connection = await ctx.db
+    const googleConnections = await Promise.all([...googleConnectionRefs].map((externalId) =>
+      ctx.db
         .query("connections")
         .withIndex("by_owner_external_id", (q) =>
           q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId),
         )
-        .unique();
+        .unique(),
+    ));
+    const googleOwners = new Set<string>();
+    for (const connection of googleConnections) {
       if (!connection || connection.provider !== "google" || !connection.clerkUserId) {
         throw new Error("A selected Google connection is unavailable. Reconnect it before saving.");
       }
@@ -154,13 +156,17 @@ export const remove = mutation({
     const workflow = await ctx.db.get(workflowId);
     if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
     const runs = await ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect();
-    for (const run of runs) {
-      const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
-      for (const step of steps) await ctx.db.delete(step._id);
-      const auditLogs = await ctx.db.query("auditLogs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect();
-      for (const auditLog of auditLogs) await ctx.db.delete(auditLog._id);
+    await Promise.all(runs.map(async (run) => {
+      const [steps, auditLogs] = await Promise.all([
+        ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+        ctx.db.query("auditLogs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ]);
+      await Promise.all([
+        ...steps.map((step) => ctx.db.delete(step._id)),
+        ...auditLogs.map((auditLog) => ctx.db.delete(auditLog._id)),
+      ]);
       await ctx.db.delete(run._id);
-    }
+    }));
     await ctx.db.delete(workflowId);
   },
 });
@@ -169,17 +175,17 @@ export const backfillWebhookSlugs = internalMutation({
   args: {},
   handler: async (ctx) => {
     const workflows = await ctx.db.query("workflows").collect();
-    let updated = 0;
+    const updates: Array<Promise<void>> = [];
     for (const workflow of workflows) {
       const slug = workflow.nodes
         .find((node) => node?.data?.nodeType === "webhookTrigger")
         ?.data?.config?.slug;
       const webhookSlug = typeof slug === "string" && slug.trim() ? slug.trim() : undefined;
       if (workflow.webhookSlug !== webhookSlug) {
-        await ctx.db.patch(workflow._id, { webhookSlug });
-        updated += 1;
+        updates.push(ctx.db.patch(workflow._id, { webhookSlug }));
       }
     }
-    return updated;
+    await Promise.all(updates);
+    return updates.length;
   },
 });

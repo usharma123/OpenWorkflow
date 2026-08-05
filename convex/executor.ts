@@ -46,6 +46,7 @@ function executionErrorMessage(error: unknown): string {
 }
 
 function topologicalSort(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const indegree = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
   for (const edge of edges) {
@@ -61,7 +62,7 @@ function topologicalSort(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
       const count = (indegree.get(target) ?? 1) - 1;
       indegree.set(target, count);
       if (count === 0) {
-        const next = nodes.find((candidate) => candidate.id === target);
+        const next = nodesById.get(target);
         if (next) queue.push(next);
       }
     }
@@ -269,8 +270,11 @@ export const executeNode = internalAction({
         body: method === "GET" || method === "HEAD" ? undefined : bodyText || undefined,
         redirect: "error",
       });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 500)}`);
+      }
       const responseText = await response.text();
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${responseText.slice(0, 500)}`);
       const contentType = response.headers.get("content-type") ?? "";
       return {
         status: response.status,
@@ -384,11 +388,18 @@ export const executeWorkflow = workflow
       const nodes = definition.nodes as WorkflowNode[];
       const edges = definition.edges as WorkflowEdge[];
       const ordered = topologicalSort(nodes, edges);
+      const incomingByTarget = new Map<string, WorkflowEdge[]>();
+      for (const edge of edges) {
+        const incoming = incomingByTarget.get(edge.target);
+        if (incoming) incoming.push(edge);
+        else incomingByTarget.set(edge.target, [edge]);
+      }
       const decisions = new Map<string, boolean>();
       let value: unknown = run.input;
 
       for (const node of ordered) {
-        const incoming = edges.filter((edge) => edge.target === node.id);
+        const { label, nodeType, config } = node.data;
+        const incoming = incomingByTarget.get(node.id) ?? [];
         const blocked = incoming.some((edge) => {
           const decision = decisions.get(edge.source);
           return decision !== undefined && edge.sourceHandle && edge.sourceHandle !== String(decision);
@@ -398,21 +409,21 @@ export const executeWorkflow = workflow
           continue;
         }
 
-        const isApproval = node.data.nodeType === "approval";
+        const isApproval = nodeType === "approval";
         const stepRunId = await step.runMutation(internal.executor.startStep, {
           runId,
           nodeId: node.id,
-          nodeLabel: node.data.label,
-          nodeType: node.data.nodeType,
-          connectionRef: typeof node.data.config.connectionRef === "string" ? node.data.config.connectionRef : undefined,
+          nodeLabel: label,
+          nodeType,
+          connectionRef: typeof config.connectionRef === "string" ? config.connectionRef : undefined,
           input: value,
           waiting: isApproval,
         });
         activeStepRunId = stepRunId;
 
-        if (node.data.nodeType === "delay") {
-          const milliseconds = Math.max(1, Number(node.data.config.seconds ?? 60)) * 1000;
-          await step.sleep(milliseconds, { name: `Delay: ${node.data.label}` });
+        if (nodeType === "delay") {
+          const milliseconds = Math.max(1, Number(config.seconds ?? 60)) * 1000;
+          await step.sleep(milliseconds, { name: `Delay: ${label}` });
         } else if (isApproval) {
           const approval = await step.awaitEvent({
             name: `approval:${node.id}`,
@@ -421,8 +432,8 @@ export const executeWorkflow = workflow
           value = applyApprovalDecision(value, approval, Date.now());
         } else {
           const isNonIdempotentLiveWrite =
-            String(node.data.config.executionMode ?? "demo") === "live" &&
-            (node.data.nodeType === "googleDoc" || node.data.nodeType === "slack");
+            String(config.executionMode ?? "demo") === "live" &&
+            (nodeType === "googleDoc" || nodeType === "slack");
           value = await step.runAction(
             internal.executor.executeNode,
             { node, input: value, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
@@ -432,7 +443,7 @@ export const executeWorkflow = workflow
           );
         }
 
-        if (node.data.nodeType === "condition") {
+        if (nodeType === "condition") {
           decisions.set(node.id, Boolean((value as { passed?: boolean })?.passed));
         }
         await step.runMutation(internal.executor.finishStep, { stepRunId, output: value });

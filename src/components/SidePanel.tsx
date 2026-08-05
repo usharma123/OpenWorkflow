@@ -24,15 +24,23 @@ interface SidePanelProps {
 export function SidePanel({ mode, onModeChange, stepLabel, runBadge, step, run }: SidePanelProps) {
   const [width, setWidth] = useState(initialWidth);
   const dragging = useRef(false);
+  const resizeFrame = useRef<number | undefined>(undefined);
+  const pendingWidth = useRef(width);
 
   useEffect(() => {
-    localStorage.setItem(WIDTH_KEY, String(width));
+    const timer = window.setTimeout(() => localStorage.setItem(WIDTH_KEY, String(width)), 150);
+    return () => window.clearTimeout(timer);
   }, [width]);
 
   const onPointerMove = useCallback((event: PointerEvent) => {
     if (!dragging.current) return;
     const next = window.innerWidth - event.clientX;
-    setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next)));
+    pendingWidth.current = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next));
+    if (resizeFrame.current !== undefined) return;
+    resizeFrame.current = window.requestAnimationFrame(() => {
+      setWidth(pendingWidth.current);
+      resizeFrame.current = undefined;
+    });
   }, []);
 
   const stopDrag = useCallback(() => {
@@ -47,6 +55,7 @@ export function SidePanel({ mode, onModeChange, stepLabel, runBadge, step, run }
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", stopDrag);
+      if (resizeFrame.current !== undefined) window.cancelAnimationFrame(resizeFrame.current);
     };
   }, [onPointerMove, stopDrag]);
 

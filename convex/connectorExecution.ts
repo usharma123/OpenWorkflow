@@ -97,12 +97,13 @@ export const executeLiveConnector = internalAction({
         headers: { Authorization: `Bearer ${oauth.token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
-      const document = (await createResponse.json()) as { documentId?: string; error?: { message?: string } };
       if (createResponse.status === 401 || createResponse.status === 403) {
         await markNeedsReauth(ctx, ownerKey, connectionRef, scopes);
         throw new Error("Google Docs rejected this grant. Reauthorize Google Workspace with Docs and Drive permissions.");
       }
-      if (!createResponse.ok || !document.documentId) throw new Error(document.error?.message ?? `Google Docs could not create the document (${createResponse.status}).`);
+      if (!createResponse.ok) throw new Error(`Google Docs could not create the document (${createResponse.status}).`);
+      const document = (await createResponse.json()) as { documentId?: string };
+      if (!document.documentId) throw new Error("Google Docs did not return a document ID.");
       const updateResponse = await fetch(`https://docs.googleapis.com/v1/documents/${document.documentId}:batchUpdate`, {
         method: "POST",
         headers: { Authorization: `Bearer ${oauth.token}`, "Content-Type": "application/json" },
@@ -124,13 +125,14 @@ export const executeLiveConnector = internalAction({
             headers: { Authorization: `Bearer ${oauth.token}`, "Content-Type": "application/json" },
             body: JSON.stringify({ name: folderName, mimeType: "application/vnd.google-apps.folder" }),
           });
+          if (!createFolder.ok) throw new Error(`Google Drive could not create the destination folder (${createFolder.status}).`);
           const folder = (await createFolder.json()) as { id?: string };
-          if (!createFolder.ok || !folder.id) throw new Error(`Google Drive could not create the destination folder (${createFolder.status}).`);
+          if (!folder.id) throw new Error("Google Drive did not return a folder ID.");
           folderId = folder.id;
         }
         const file = await fetch(`https://www.googleapis.com/drive/v3/files/${document.documentId}?fields=parents`, { headers: { Authorization: `Bearer ${oauth.token}` } });
-        const fileMetadata = (await file.json()) as { parents?: string[] };
         if (!file.ok) throw new Error(`Google Drive could not inspect the new document (${file.status}).`);
+        const fileMetadata = (await file.json()) as { parents?: string[] };
         const move = await fetch(`https://www.googleapis.com/drive/v3/files/${document.documentId}?addParents=${encodeURIComponent(folderId)}&removeParents=${encodeURIComponent((fileMetadata.parents ?? []).join(","))}&fields=id,parents`, {
           method: "PATCH",
           headers: { Authorization: `Bearer ${oauth.token}` },
@@ -156,8 +158,9 @@ export const executeLiveConnector = internalAction({
         body: JSON.stringify({ channel, text: message, unfurl_links: false }),
         signal: AbortSignal.timeout(10_000),
       });
+      if (!response.ok) throw new Error(`Slack could not post the approved link (${response.status}).`);
       const payload = (await response.json()) as { ok?: boolean; error?: string; ts?: string; channel?: string };
-      if (!response.ok || !payload.ok) {
+      if (!payload.ok) {
         if (["invalid_auth", "token_revoked", "account_inactive", "missing_scope"].includes(payload.error ?? "")) {
           await markNeedsReauth(ctx, ownerKey, connectionRef);
         }

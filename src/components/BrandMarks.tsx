@@ -78,26 +78,3 @@ export function GoogleMark({ size = 18 }: MarkProps) {
     </svg>
   );
 }
-
-/*
- * Steps with no vendor behind them get a monochrome glyph rather than an
- * invented accent colour, so brand marks stay meaningful on the canvas.
- */
-export function StepGlyph({ size = 18 }: MarkProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <rect x="4" y="4" width="16" height="16" rx="4" />
-    </svg>
-  );
-}

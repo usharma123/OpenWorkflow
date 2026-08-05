@@ -38,12 +38,17 @@ function formatDuration(startedAt: number, completedAt?: number): string {
 function citationsOf(output: unknown): Citation[] {
   const raw = record(output).citations;
   if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item, index) => {
+  const unique = new Map<string, Citation>();
+  raw.forEach((item, index) => {
     const nested = record(record(item).url_citation ?? item);
     const url = typeof nested.url === "string" ? nested.url : "";
-    if (!url) return [];
-    return [{ title: typeof nested.title === "string" ? nested.title : `Source ${index + 1}`, url }];
+    if (!url || unique.has(url)) return;
+    unique.set(url, {
+      title: typeof nested.title === "string" ? nested.title : `Source ${index + 1}`,
+      url,
+    });
   });
+  return [...unique.values()];
 }
 
 /* A one-line result for steps that collapse. Falls back to nothing rather than dumping JSON. */
@@ -205,7 +210,7 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
         <div className="tx-sources">
           <span className="t-eyebrow">Sources</span>
           {citations.map((citation, index) => (
-            <a href={citation.url} target="_blank" rel="noreferrer noopener" key={`${citation.url}-${index}`}>
+            <a href={citation.url} target="_blank" rel="noreferrer noopener" key={citation.url}>
               <span className="t-mono">{index + 1}</span>
               <strong>{citation.title}</strong>
               <ExternalLink size={12} />
@@ -234,7 +239,9 @@ function ApprovalCard({
         <span className="badge">Waiting for you</span>
       </div>
       <p>{approval.prompt}</p>
+      <label className="t-eyebrow" htmlFor={`approval-note-${approval.nodeId}`}>Note</label>
       <textarea
+        id={`approval-note-${approval.nodeId}`}
         className="input"
         value={note}
         onChange={(event) => setNote(event.target.value)}

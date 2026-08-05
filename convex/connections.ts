@@ -32,10 +32,13 @@ export const list = query({
       .query("connections")
       .withIndex("by_owner_provider", (q) => q.eq("ownerKey", principal.ownerKey))
       .collect();
-    return connections
-      .filter((connection) => connection.provider !== "google" || connection.clerkUserId === principal.userId)
-      .map((connection) => publicConnection(connection))
-      .filter((connection) => connection !== null);
+    const visible = [];
+    for (const connection of connections) {
+      if (connection.provider === "google" && connection.clerkUserId !== principal.userId) continue;
+      const value = publicConnection(connection);
+      if (value) visible.push(value);
+    }
+    return visible;
   },
 });
 export const auditForRun = query({
@@ -195,7 +198,7 @@ export const cleanupExpiredOauthStates = internalMutation({
       .query("oauthStates")
       .withIndex("by_expires_at", (q) => q.lt("expiresAt", Date.now()))
       .collect();
-    for (const state of expired) await ctx.db.delete(state._id);
+    await Promise.all(expired.map((state) => ctx.db.delete(state._id)));
     return expired.length;
   },
 });
@@ -204,15 +207,19 @@ export const cleanupLegacyConnections = internalMutation({
   args: {},
   handler: async (ctx) => {
     const connections = await ctx.db.query("connections").collect();
-    let removed = 0;
-    for (const connection of connections) {
+    const operations = connections.map((connection) => {
       if (!connection.ownerKey || !connection.clerkUserId || !connection.externalAccountId) {
-        await ctx.db.delete(connection._id);
-        removed += 1;
-      } else if (connection.secretLocator !== undefined) {
-        await ctx.db.patch(connection._id, { secretLocator: undefined });
+        return ctx.db.delete(connection._id);
       }
-    }
+      if (connection.secretLocator !== undefined) {
+        return ctx.db.patch(connection._id, { secretLocator: undefined });
+      }
+      return Promise.resolve();
+    });
+    await Promise.all(operations);
+    const removed = connections.filter(
+      (connection) => !connection.ownerKey || !connection.clerkUserId || !connection.externalAccountId,
+    ).length;
     return removed;
   },
 });

@@ -3,6 +3,7 @@ import type { PendingApproval, RunLog, WorkflowDefinition, WorkflowNode, Workflo
 const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 function orderedNodes(workflow: WorkflowDefinition): WorkflowNode[] {
+  const nodesById = new Map(workflow.nodes.map((node) => [node.id, node]));
   const incoming = new Map(workflow.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
   for (const edge of workflow.edges) {
@@ -19,7 +20,7 @@ function orderedNodes(workflow: WorkflowDefinition): WorkflowNode[] {
       const next = (incoming.get(target) ?? 1) - 1;
       incoming.set(target, next);
       if (next === 0) {
-        const targetNode = workflow.nodes.find((candidate) => candidate.id === target);
+        const targetNode = nodesById.get(target);
         if (targetNode) queue.push(targetNode);
       }
     }
@@ -58,29 +59,30 @@ export async function runDemo(
 
   try {
     for (const node of orderedNodes(workflow)) {
+      const { label, description, nodeType, config } = node.data;
       activeNodeId = node.id;
       onNodeStatus(node.id, "running");
-      log({ level: "info", nodeId: node.id, message: node.data.label, explanation: node.data.description });
+      log({ level: "info", nodeId: node.id, message: label, explanation: description });
       await wait(360);
-      if (node.data.nodeType === "gmailTrigger") {
+      if (nodeType === "gmailTrigger") {
         value = { messages: sampleMessages, count: sampleMessages.length, date: new Date().toLocaleDateString(), source: "sample" };
         log({ level: "success", nodeId: node.id, message: `${sampleMessages.length} sample emails collected`, explanation: "Live mode uses the named Google Workspace connection with Gmail read-only scope.", output: value });
-      } else if (node.data.nodeType === "ai") {
+      } else if (nodeType === "ai") {
         value = { content: "DECISIONS NEEDED\n• Finance: Approve revised Q3 hiring assumptions by Thursday.\n\nIMPORTANT UPDATES\n• Product: Beta launch remains on track; legal review is the final dependency.\n\nFOLLOW-UPS\n• Customer Success: Assign an executive sponsor for the Acme renewal call next week.", model: "openai/gpt-5.6-luna", source: "sample", date: new Date().toLocaleDateString() };
         log({ level: "success", nodeId: node.id, message: "Executive brief drafted", explanation: "The connected run uses GPT-5.6 Luna through OpenRouter; this browser demo returns a representative response.", output: value });
-      } else if (node.data.nodeType === "googleDoc") {
+      } else if (nodeType === "googleDoc") {
         value = { ...(value as Record<string, unknown>), documentTitle: `Inbox brief — ${new Date().toLocaleDateString()}`, documentUrl: "https://docs.google.com/document/d/demo-openworkflow-inbox-brief/edit", documentMode: "demo" };
         log({ level: "success", nodeId: node.id, message: "Demo document prepared", explanation: "No real document was created. Connected mode creates it in the approved Google Drive location.", output: value });
-      } else if (node.data.nodeType === "approval") {
-        const decision = await requestApproval({ runId: run.id, nodeId: node.id, title: node.data.label, prompt: String(node.data.config.prompt ?? "Approve this result?"), input: value });
+      } else if (nodeType === "approval") {
+        const decision = await requestApproval({ runId: run.id, nodeId: node.id, title: label, prompt: String(config.prompt ?? "Approve this result?"), input: value });
         if (!decision.approved) throw new Error(decision.note || "The reviewer rejected this result. Update the earlier step and run it again.");
         value = { ...(value as Record<string, unknown>), approval: { approved: true, note: decision.note, decidedAt: Date.now() } };
         log({ level: "success", nodeId: node.id, message: "Approved by reviewer", explanation: decision.note || "The approval decision is attached to the run audit trail.", output: value });
-      } else if (node.data.nodeType === "slack") {
-        value = { ...(value as Record<string, unknown>), delivery: { provider: "slack", channel: String(node.data.config.channel ?? "#leadership-updates"), status: "simulated", message: renderTemplate(String(node.data.config.message ?? "{{input.documentUrl}}"), value) } };
+      } else if (nodeType === "slack") {
+        value = { ...(value as Record<string, unknown>), delivery: { provider: "slack", channel: String(config.channel ?? "#leadership-updates"), status: "simulated", message: renderTemplate(String(config.message ?? "{{input.documentUrl}}"), value) } };
         log({ level: "success", nodeId: node.id, message: "Slack post simulated", explanation: "The document link was not sent. Connected mode posts only after the approval step succeeds.", output: value });
       } else {
-        log({ level: "success", nodeId: node.id, message: `${node.data.label} completed`, output: value });
+        log({ level: "success", nodeId: node.id, message: `${label} completed`, output: value });
       }
       onNodeStatus(node.id, "success");
       activeNodeId = undefined;

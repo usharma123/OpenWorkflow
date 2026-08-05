@@ -5,16 +5,7 @@ import { GmailMark, SlackMark } from "../components/BrandMarks";
 import { WorkflowMark } from "../components/WorkflowMark";
 import { useConnections } from "../lib/connections";
 import { convexClient, syncGoogleRef } from "../lib/convexClient";
-
-const SETUP_SEEN_KEY = "openworkflow.setupComplete";
-
-export function markSetupSeen() {
-  localStorage.setItem(SETUP_SEEN_KEY, "true");
-}
-
-export function hasSeenSetup(): boolean {
-  return localStorage.getItem(SETUP_SEEN_KEY) === "true";
-}
+import { markSetupSeen } from "../lib/setup";
 
 /*
  * Post-sign-in confirmation. Clerk can grant the Workspace scopes during

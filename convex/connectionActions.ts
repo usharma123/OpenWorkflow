@@ -26,7 +26,9 @@ function clerkClient() {
 function safeReturnUrl(candidate?: string) {
   const appUrl = process.env.APP_URL;
   if (!appUrl) throw new Error("APP_URL is not configured in Convex.");
+  if (!URL.canParse(appUrl)) throw new Error("APP_URL is not a valid URL.");
   const allowed = new URL(appUrl);
+  if (candidate && !URL.canParse(candidate, allowed)) throw new Error("OAuth return URL is invalid.");
   const requested = candidate ? new URL(candidate, allowed) : allowed;
   if (requested.origin !== allowed.origin) throw new Error("OAuth return URL must use the configured app origin.");
   requested.search = "";
@@ -56,9 +58,9 @@ export const syncGoogle = action({
       );
     }
     const tokens = response.data;
-    for (const token of tokens) {
+    await Promise.all(tokens.map((token) => {
       const scopes = token.scopes ?? [];
-      await ctx.runMutation(internal.connections.upsertGoogle, {
+      return ctx.runMutation(internal.connections.upsertGoogle, {
         ownerKey: principal.ownerKey,
         clerkUserId: principal.userId,
         organizationId: principal.organizationId,
@@ -69,7 +71,7 @@ export const syncGoogle = action({
         scopes,
         status: hasRequiredScopes(scopes, GOOGLE_REQUIRED_SCOPES) ? "active" : "needs_reauth",
       });
-    }
+    }));
     return { count: tokens.length };
   },
 });
@@ -152,6 +154,9 @@ export const finishSlackOAuth = internalAction({
       body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code: args.code, redirect_uri: redirectUri }),
       signal: AbortSignal.timeout(10_000),
     });
+    if (!response.ok) {
+      return callbackUrl(state.returnUrl, "error", `Slack token exchange failed (${response.status}).`);
+    }
     const payload = (await response.json()) as {
       ok?: boolean;
       error?: string;
@@ -162,7 +167,7 @@ export const finishSlackOAuth = internalAction({
       enterprise?: { id?: string; name?: string };
     };
     const workspaceId = payload.team?.id ?? payload.enterprise?.id;
-    if (!response.ok || !payload.ok || !payload.access_token || !workspaceId) {
+    if (!payload.ok || !payload.access_token || !workspaceId) {
       return callbackUrl(state.returnUrl, "error", payload.error ?? `Slack token exchange failed (${response.status}).`);
     }
     const encrypted = encryptSecret(payload.access_token);
@@ -199,8 +204,10 @@ export const disconnectSlack = action({
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
         });
-        const payload = (await response.json()) as { ok?: boolean };
-        revoked = response.ok && Boolean(payload.ok);
+        if (response.ok) {
+          const payload = (await response.json()) as { ok?: boolean };
+          revoked = Boolean(payload.ok);
+        }
       } catch {
         revoked = false;
       }

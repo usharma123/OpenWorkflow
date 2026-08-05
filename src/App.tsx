@@ -1,10 +1,5 @@
 import {
   addEdge,
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  ReactFlow,
   reconnectEdge,
   useEdgesState,
   useNodesState,
@@ -20,7 +15,7 @@ import { Inspector } from "./components/Inspector";
 import { NodePalette } from "./components/NodePalette";
 import { RunTranscript } from "./components/RunTranscript";
 import { SidePanel, type PanelMode } from "./components/SidePanel";
-import { WorkflowNodeComponent } from "./components/WorkflowNode";
+import { WorkflowCanvas } from "./components/WorkflowCanvas";
 import { useConnections } from "./lib/connections";
 import {
   approveRunRef,
@@ -40,8 +35,6 @@ import type {
   WorkflowNode,
   WorkflowNodeType,
 } from "./types";
-
-const nodeTypes = { workflow: WorkflowNodeComponent };
 
 function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
   return nodes.map((node) => {
@@ -210,10 +203,15 @@ export default function App() {
     [addNode, reactFlow],
   );
 
-  const selectNode = (id: string) => {
+  const selectNode = useCallback((id: string) => {
     setSelectedNodeId(id);
     setPanelMode("step");
-  };
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedNodeId(undefined);
+    setPanelMode("run");
+  }, []);
 
   const updateSelectedNode = (updated: WorkflowNode) =>
     setNodes((current) => current.map((node) => (node.id === updated.id ? updated : node)));
@@ -336,7 +334,9 @@ export default function App() {
                           : latest
                             ? "running"
                             : "idle";
-                  return { ...node, data: { ...node.data, status } };
+                  return node.data.status === status
+                    ? node
+                    : { ...node, data: { ...node.data, status } };
                 }),
               );
 
@@ -469,39 +469,17 @@ export default function App() {
       <div className="workspace">
         <NodePalette onAdd={addNode} />
 
-        <section
-          className="canvas"
+        <WorkflowCanvas
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          onReconnect={onReconnect}
+          onSelectNode={selectNode}
+          onPaneClick={clearSelection}
           onDrop={onDrop}
-          onDragOver={(event) => event.preventDefault()}
-        >
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onReconnect={onReconnect}
-            edgesReconnectable
-            connectionRadius={36}
-            reconnectRadius={36}
-            onNodeClick={(_, node) => selectNode(node.id)}
-            onPaneClick={() => {
-              setSelectedNodeId(undefined);
-              setPanelMode("run");
-            }}
-            deleteKeyCode={["Backspace", "Delete"]}
-            fitView
-            fitViewOptions={{ padding: 0.26 }}
-            minZoom={0.35}
-            maxZoom={1.6}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#1f1f23" />
-            <Controls showInteractive={false} />
-            <MiniMap nodeColor="#3a3a42" maskColor="rgba(10, 10, 11, .8)" pannable />
-          </ReactFlow>
-          <div className="canvas-note">Each step receives the result from the step before it</div>
-        </section>
+        />
 
         <SidePanel
           mode={panelMode}

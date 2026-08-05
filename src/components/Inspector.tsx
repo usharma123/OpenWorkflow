@@ -63,7 +63,9 @@ function Num({
         max={max}
         value={value}
         onChange={(e) => {
-          const parsed = Number(e.target.value);
+          const raw = e.currentTarget.value;
+          if (raw === "") return;
+          const parsed = Number(raw);
           if (!Number.isFinite(parsed)) return;
           const clamped = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, Math.trunc(parsed)));
           onChange(clamped);

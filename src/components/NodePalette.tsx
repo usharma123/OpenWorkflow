@@ -1,12 +1,17 @@
 import { Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { NODE_CATALOG } from "../catalog";
 import type { NodeCategory, WorkflowNodeType } from "../types";
 import { NodeMark } from "./icons";
 
 const CATEGORIES: NodeCategory[] = ["Start", "Think", "Review", "Deliver", "Advanced"];
 
-export function NodePalette({ onAdd }: { onAdd: (type: WorkflowNodeType) => void }) {
+function startDrag(event: React.DragEvent, type: WorkflowNodeType) {
+  event.dataTransfer.setData("application/openworkflow-node", type);
+  event.dataTransfer.effectAllowed = "move";
+}
+
+export const NodePalette = memo(function NodePalette({ onAdd }: { onAdd: (type: WorkflowNodeType) => void }) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
 
@@ -20,11 +25,6 @@ export function NodePalette({ onAdd }: { onAdd: (type: WorkflowNodeType) => void
       ),
     [normalized],
   );
-
-  const startDrag = (event: React.DragEvent, type: WorkflowNodeType) => {
-    event.dataTransfer.setData("application/openworkflow-node", type);
-    event.dataTransfer.effectAllowed = "move";
-  };
 
   return (
     <aside className="palette">
@@ -70,4 +70,4 @@ export function NodePalette({ onAdd }: { onAdd: (type: WorkflowNodeType) => void
       </div>
     </aside>
   );
-}
+});
