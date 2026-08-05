@@ -38,8 +38,8 @@ export function SignInScreen() {
           <WorkflowMark size={20} />
           <span>OpenWorkflow</span>
         </div>
-        <h1>Your inbox, summarized and delivered.</h1>
-        <p>With you in the loop before anything is shared.</p>
+        <h1>Build agents that think, act, and stay under your control.</h1>
+        <p>Connect models, tools, data, and human approvals in a visual workflow.</p>
 
         <button className="btn btn-primary auth-google" onClick={() => void start()} disabled={busy || !signIn}>
           <GoogleMark size={18} />
@@ -49,8 +49,8 @@ export function SignInScreen() {
         {error && <p className="auth-error">{error}</p>}
 
         <p className="auth-fine">
-          OpenWorkflow reads your Gmail inbox and creates Google Docs. It never sends a message
-          without your approval, and it never stores your Google password.
+          OpenWorkflow is a visual agent builder. Gmail, Google Docs, and Slack are optional tools;
+          agents only use the accounts and actions you configure.
         </p>
       </div>
     </main>
