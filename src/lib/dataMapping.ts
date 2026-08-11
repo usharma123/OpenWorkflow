@@ -31,6 +31,7 @@ const targetsByType: Partial<Record<WorkflowNodeType, MappingTarget[]>> = {
     { key: "body", label: "Body", multiline: true },
   ],
   transform: [{ key: "template", label: "Template", multiline: true }],
+  forEach: [{ key: "template", label: "Item template", multiline: true }],
 };
 
 const unsafePathKeys = new Set(["__proto__", "prototype", "constructor"]);

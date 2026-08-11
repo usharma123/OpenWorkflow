@@ -2,6 +2,7 @@ import type { PendingApproval, RunLog, WorkflowDefinition, WorkflowNode, Workflo
 import {
   inputPacketsForNode,
   inputValueForPackets,
+  mergeExecutionValues,
   packetForNodeOutput,
   nodeIdsForRunScope,
   terminalOutput,
@@ -101,6 +102,18 @@ export async function runDemo(
         log({ level: "success", nodeId: node.id, message: "Slack post simulated", explanation: "The document link was not sent. Connected mode posts only after the approval step succeeds.", output });
       } else if (nodeType === "transform") {
         output = { value: renderTemplate(String(config.template ?? "{{input}}"), value, stepOutputs) };
+        log({ level: "success", nodeId: node.id, message: `${label} completed`, output });
+      } else if (nodeType === "forEach") {
+        const path = String(config.path ?? "items");
+        const selected = path ? valueAtPath(value, path) : value;
+        if (!Array.isArray(selected)) throw new Error(`For each item expected an array at ${path || "the input"}.`);
+        const items = selected.map((item) => renderTemplate(String(config.template ?? "{{input}}"), item, stepOutputs));
+        output = { items, count: items.length };
+        log({ level: "success", nodeId: node.id, message: `${items.length} items processed`, output });
+      } else if (nodeType === "merge") {
+        const mode = String(config.mode ?? "append") as "append" | "combine" | "first";
+        if (!["append", "combine", "first"].includes(mode)) throw new Error("Merge mode is invalid.");
+        output = mergeExecutionValues(value, mode);
         log({ level: "success", nodeId: node.id, message: `${label} completed`, output });
       } else if (nodeType === "condition") {
         const actual = valueAtPath(value, String(config.path ?? ""));

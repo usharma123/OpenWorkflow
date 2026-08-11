@@ -77,6 +77,10 @@ function stepSummary(step: RunStepSummary): string {
       return `HTTP ${String(out.status ?? "")}`.trim();
     case "transform":
       return "Reshaped";
+    case "forEach":
+      return `${Number(out.count ?? 0)} items`;
+    case "merge":
+      return Array.isArray(out.items) ? `${out.items.length} merged items` : "Branches merged";
     case "approval":
       return step.status === "completed" ? "Decision recorded" : "";
     default:

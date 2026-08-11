@@ -287,11 +287,13 @@
 }
 
 /* A condition needs room for its two branch labels beside the outputs. */
-.wf-node.is-condition {
+.wf-node.is-condition,
+.wf-node.has-error-output {
   min-height: 74px;
 }
 
-.wf-node.is-condition .wf-node-body {
+.wf-node.is-condition .wf-node-body,
+.wf-node.has-error-output .wf-node-body {
   padding-right: 40px;
 }
 
@@ -311,6 +313,11 @@
 
 .wf-branch.is-false {
   top: 72%;
+}
+
+.wf-branch.is-error {
+  top: 67%;
+  color: var(--danger, #b42318);
 }
 
 /* ---- Daytona sandbox boundary ----------------------------------------- */

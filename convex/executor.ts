@@ -8,6 +8,7 @@ import { renderTemplate, valueAtPath } from "./template";
 import {
   inputPacketsForNode,
   inputValueForPackets,
+  mergeExecutionValues,
   packetForNodeOutput,
   nodeIdsForRunScope,
   terminalOutput,
@@ -244,6 +245,20 @@ export const executeNode = internalAction({
       return { value: renderTemplate(String(config.template ?? "{{input}}"), input, stepOutputs) };
     }
 
+    if (nodeType === "forEach") {
+      const path = String(config.path ?? "items");
+      const selected = path ? valueAtPath(input, path) : input;
+      if (!Array.isArray(selected)) throw new Error(`For each item expected an array at ${path || "the input"}.`);
+      const items = selected.map((item) => renderTemplate(String(config.template ?? "{{input}}"), item, stepOutputs));
+      return { items, count: items.length };
+    }
+
+    if (nodeType === "merge") {
+      const mode = String(config.mode ?? "append");
+      if (!["append", "combine", "first"].includes(mode)) throw new Error("Merge mode is invalid.");
+      return mergeExecutionValues(input, mode as "append" | "combine" | "first");
+    }
+
     if (nodeType === "condition") {
       const actual = valueAtPath(input, String(config.path ?? ""));
       const expected = config.value;
@@ -438,55 +453,66 @@ export const executeWorkflow = workflow
         });
         activeStepRunId = stepRunId;
 
-        if (nodeType === "delay") {
-          const milliseconds = Math.max(1, Number(config.seconds ?? 60)) * 1000;
-          await step.sleep(milliseconds, { name: `Delay: ${label}` });
-        } else if (isApproval) {
-          const approval = await step.awaitEvent({
-            name: `approval:${node.id}`,
-            validator: v.object({ approved: v.boolean(), note: v.optional(v.string()) }),
-          });
-          const output = applyApprovalDecision(value, approval, Date.now());
-          outputs.set(node.id, packetForNodeOutput(node, output));
-        } else if (daytonaNodeTypes.has(nodeType)) {
-          if (!node.parentId) throw new Error(`${label} must be inside a Daytona sandbox boundary.`);
-          const boundary = allNodes.find((candidate) =>
-            candidate.id === node.parentId && candidate.data.nodeType === "daytonaSandbox");
-          if (!boundary) throw new Error(`The Daytona sandbox boundary for ${label} is missing.`);
-          const result = await step.runAction(internal.daytonaExecution.execute, {
-            node,
-            input: value,
-            boundaryId: boundary.id,
-            boundaryConfig: boundary.data.config,
-            existingSandboxId: sandboxIdsByBoundary.get(boundary.id),
-            stepRunId,
-          });
-          sandboxIdsByBoundary.set(boundary.id, result.sandboxId);
-          outputs.set(node.id, packetForNodeOutput(node, result.output));
-        } else {
-          const stepOutputs = Object.fromEntries(
-            [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
-          );
-          const isNonIdempotentLiveWrite =
-            String(config.executionMode ?? "demo") === "live" &&
-            (nodeType === "googleDoc" || nodeType === "slack");
-          const output = await step.runAction(
-            internal.executor.executeNode,
-            { node, input: value, stepOutputs, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
-            isNonIdempotentLiveWrite
-              ? undefined
-              : { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },
-          );
-          outputs.set(node.id, packetForNodeOutput(node, output));
-        }
+        try {
+          if (nodeType === "delay") {
+            const milliseconds = Math.max(1, Number(config.seconds ?? 60)) * 1000;
+            await step.sleep(milliseconds, { name: `Delay: ${label}` });
+          } else if (isApproval) {
+            const approval = await step.awaitEvent({
+              name: `approval:${node.id}`,
+              validator: v.object({ approved: v.boolean(), note: v.optional(v.string()) }),
+            });
+            const output = applyApprovalDecision(value, approval, Date.now());
+            outputs.set(node.id, packetForNodeOutput(node, output));
+          } else if (daytonaNodeTypes.has(nodeType)) {
+            if (!node.parentId) throw new Error(`${label} must be inside a Daytona sandbox boundary.`);
+            const boundary = allNodes.find((candidate) =>
+              candidate.id === node.parentId && candidate.data.nodeType === "daytonaSandbox");
+            if (!boundary) throw new Error(`The Daytona sandbox boundary for ${label} is missing.`);
+            const result = await step.runAction(internal.daytonaExecution.execute, {
+              node,
+              input: value,
+              boundaryId: boundary.id,
+              boundaryConfig: boundary.data.config,
+              existingSandboxId: sandboxIdsByBoundary.get(boundary.id),
+              stepRunId,
+            });
+            sandboxIdsByBoundary.set(boundary.id, result.sandboxId);
+            outputs.set(node.id, packetForNodeOutput(node, result.output));
+          } else {
+            const stepOutputs = Object.fromEntries(
+              [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
+            );
+            const isNonIdempotentLiveWrite =
+              String(config.executionMode ?? "demo") === "live" &&
+              (nodeType === "googleDoc" || nodeType === "slack");
+            const output = await step.runAction(
+              internal.executor.executeNode,
+              { node, input: value, stepOutputs, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
+              isNonIdempotentLiveWrite
+                ? undefined
+                : { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },
+            );
+            outputs.set(node.id, packetForNodeOutput(node, output));
+          }
 
-        if (nodeType === "delay") {
-          outputs.set(node.id, packetForNodeOutput(node, value));
+          if (nodeType === "delay") outputs.set(node.id, packetForNodeOutput(node, value));
+          const packet = outputs.get(node.id);
+          if (!packet) throw new Error(`${label} did not produce an output.`);
+          await step.runMutation(internal.executor.finishStep, { stepRunId, output: packet.value });
+          activeStepRunId = undefined;
+        } catch (error) {
+          const message = executionErrorMessage(error);
+          const hasErrorBranch = edges.some((edge) => edge.source === node.id && edge.sourceHandle === "error");
+          if (!hasErrorBranch || config.errorOutput !== true) throw error;
+          await step.runMutation(internal.executor.failStep, { stepRunId, error: message });
+          outputs.set(node.id, packetForNodeOutput(node, {
+            error: message,
+            failedNodeId: node.id,
+            failedNodeLabel: label,
+          }, "error"));
+          activeStepRunId = undefined;
         }
-        const packet = outputs.get(node.id);
-        if (!packet) throw new Error(`${label} did not produce an output.`);
-        await step.runMutation(internal.executor.finishStep, { stepRunId, output: packet.value });
-        activeStepRunId = undefined;
       }
 
       const scopedNodes = nodes.filter((node) => activeNodeIds.has(node.id));

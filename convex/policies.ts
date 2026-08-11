@@ -35,7 +35,7 @@ export function validateWorkflowGraph(nodes: WorkflowGraphNode[], edges: Workflo
   const allowedTypes = new Set([
     "manualTrigger", "webhookTrigger", "scheduleTrigger", "gmailTrigger", "gmailEventTrigger",
     "calendarTrigger", "driveTrigger", "sheetsTrigger", "ai", "googleDoc",
-    "slack", "http", "condition", "transform", "delay", "approval", "daytonaSandbox",
+    "slack", "http", "condition", "transform", "forEach", "merge", "delay", "approval", "daytonaSandbox",
     "code", "shell", "git", "output",
   ]);
   for (const node of nodes) {
@@ -103,6 +103,12 @@ export function validateWorkflowGraph(nodes: WorkflowGraphNode[], edges: Workflo
     }
     if (sourceNode?.data?.nodeType === "condition" && !["true", "false"].includes(String(edge.sourceHandle))) {
       throw new Error("Condition connections must use the true or false output port.");
+    }
+    if (edge.sourceHandle === "error") {
+      const config = sourceNode?.data?.config as Record<string, unknown> | undefined;
+      if (config?.errorOutput !== true) throw new Error("Enable the error output before connecting a recovery branch.");
+    } else if (edge.sourceHandle && sourceNode?.data?.nodeType !== "condition") {
+      throw new Error("That workflow step does not provide the selected output port.");
     }
 
     const connectionKey = JSON.stringify([

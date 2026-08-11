@@ -101,4 +101,25 @@ describe("saved workflow graph validation", () => {
       },
     }], [])).toThrow("hostnames");
   });
+
+  test("requires error outputs to be enabled before a recovery branch is connected", () => {
+    const makeNode = (id: string, errorOutput: boolean) => ({
+      id,
+      type: "workflow",
+      position: { x: 0, y: 0 },
+      data: { nodeType: "http", label: id, description: "", config: { errorOutput } },
+    });
+    const target = {
+      id: "recovery",
+      type: "workflow",
+      position: { x: 100, y: 0 },
+      data: { nodeType: "transform", label: "Recovery", description: "", config: {} },
+    };
+    expect(() => validateWorkflowGraph([makeNode("request", false), target], [
+      { source: "request", sourceHandle: "error", target: "recovery" },
+    ])).toThrow("Enable the error output");
+    expect(() => validateWorkflowGraph([makeNode("request", true), target], [
+      { source: "request", sourceHandle: "error", target: "recovery" },
+    ])).not.toThrow();
+  });
 });

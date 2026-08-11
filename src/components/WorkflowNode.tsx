@@ -15,12 +15,13 @@ export function WorkflowNodeComponent({ data, selected, parentId }: NodeProps<Wo
   const isTrigger = data.nodeType.endsWith("Trigger");
   const isOutput = data.nodeType === "output";
   const isCondition = data.nodeType === "condition";
+  const hasErrorOutput = !isCondition && !isOutput && !isTrigger && data.config.errorOutput === true;
   const status = data.status ?? "idle";
   const isDemo = item.setup === "connection" && data.config.executionMode !== "live";
 
   return (
     <div
-      className={`wf-node ${selected ? "is-selected" : ""} ${isCondition ? "is-condition" : ""} status-${status}`}
+      className={`wf-node ${selected ? "is-selected" : ""} ${isCondition ? "is-condition" : ""} ${hasErrorOutput ? "has-error-output" : ""} status-${status}`}
       data-cat={item.category}
     >
       {!isTrigger && (
@@ -65,9 +66,23 @@ export function WorkflowNodeComponent({ data, selected, parentId }: NodeProps<Wo
         <Handle
           type="source"
           position={Position.Right}
+          style={hasErrorOutput ? { top: "34%" } : undefined}
           aria-label={`Connect from ${data.label}`}
           title="Drag to another step"
         />
+      )}
+      {hasErrorOutput && (
+        <>
+          <span className="wf-branch is-error">error</span>
+          <Handle
+            id="error"
+            type="source"
+            position={Position.Right}
+            style={{ top: "72%" }}
+            aria-label={`Connect error branch from ${data.label}`}
+            title="Drag the recovery branch"
+          />
+        </>
       )}
       {isCondition && (
         <>

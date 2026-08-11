@@ -101,7 +101,8 @@ export function topologicalNodes<NodeType extends ExecutableGraphNode>(
 }
 
 function edgeCarriesPacket(edge: ExecutableGraphEdge, packet: ExecutionPacket) {
-  return !edge.sourceHandle || edge.sourceHandle === packet.port;
+  if (packet.port === "error") return edge.sourceHandle === "error";
+  return edge.sourceHandle !== "error" && (!edge.sourceHandle || edge.sourceHandle === packet.port);
 }
 
 export function inputPacketsForNode(
@@ -133,16 +134,34 @@ export function inputValueForPackets(packets: ExecutionPacket[], rootValue: unkn
 export function packetForNodeOutput(
   node: ExecutableGraphNode,
   value: unknown,
+  portOverride?: string,
 ): ExecutionPacket {
-  const port = node.data.nodeType === "condition"
+  const port = portOverride ?? (node.data.nodeType === "condition"
     ? String(Boolean((value as { passed?: boolean } | null)?.passed))
-    : "default";
+    : "default");
   return {
     id: `${node.id}:${port}:0`,
     nodeId: node.id,
     port,
     value,
   };
+}
+
+export type MergeMode = "append" | "combine" | "first";
+
+export function mergeExecutionValues(input: unknown, mode: MergeMode): unknown {
+  const values = input && typeof input === "object" && Array.isArray((input as { items?: unknown[] }).items)
+    ? (input as { items: unknown[] }).items
+    : [input];
+  if (mode === "first") return values[0];
+  if (mode === "combine") {
+    return values.reduce<Record<string, unknown>>((combined, value) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? { ...combined, ...(value as Record<string, unknown>) }
+        : combined, {});
+  }
+  const items = values.flatMap((value) => Array.isArray(value) ? value : [value]);
+  return { items, count: items.length };
 }
 
 export function terminalOutput(

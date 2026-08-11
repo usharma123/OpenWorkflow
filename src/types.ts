@@ -15,6 +15,8 @@ export type WorkflowNodeType =
   | "http"
   | "condition"
   | "transform"
+  | "forEach"
+  | "merge"
   | "delay"
   | "approval"
   | "daytonaSandbox"

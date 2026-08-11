@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   inputPacketsForNode,
   inputValueForPackets,
+  mergeExecutionValues,
   packetForNodeOutput,
   nodeIdsForRunScope,
   terminalOutput,
@@ -42,6 +43,26 @@ describe("port-aware workflow execution", () => {
 
     expect(inputPacketsForNode("yes", edges, outputs).packets).toHaveLength(1);
     expect(inputPacketsForNode("no", edges, outputs).packets).toHaveLength(0);
+  });
+
+  test("routes handled failures only through an explicit error output", () => {
+    const edges = [
+      { source: "request", target: "normal" },
+      { source: "request", sourceHandle: "error", target: "recovery" },
+    ];
+    const packet = packetForNodeOutput(node("request", "http"), { error: "Unavailable" }, "error");
+    const outputs = new Map<string, ExecutionPacket>([["request", packet]]);
+
+    expect(inputPacketsForNode("normal", edges, outputs).packets).toHaveLength(0);
+    expect(inputPacketsForNode("recovery", edges, outputs).packets).toEqual([packet]);
+  });
+
+  test("merges branch values using append, combine, or first semantics", () => {
+    const input = { items: [[1, 2], [3]], sources: [] };
+    expect(mergeExecutionValues(input, "append")).toEqual({ items: [1, 2, 3], count: 3 });
+    expect(mergeExecutionValues({ items: [{ left: 1 }, { right: 2 }], sources: [] }, "combine"))
+      .toEqual({ left: 1, right: 2 });
+    expect(mergeExecutionValues({ items: ["left", "right"], sources: [] }, "first")).toBe("left");
   });
 
   test("preserves both inputs and their provenance at a join", () => {

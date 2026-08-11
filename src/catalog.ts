@@ -106,6 +106,22 @@ export const NODE_CATALOG: NodeCatalogItem[] = [
     outcome: "Reshapes information into the format the next step expects.",
   },
   {
+    type: "forEach",
+    label: "For each item",
+    description: "Apply a safe template to every item",
+    category: "Advanced",
+    defaultConfig: { path: "items", template: "{{input}}" },
+    outcome: "Processes every item in a list without running arbitrary code.",
+  },
+  {
+    type: "merge",
+    label: "Merge branches",
+    description: "Combine results from multiple paths",
+    category: "Advanced",
+    defaultConfig: { mode: "append" },
+    outcome: "Waits for connected branches and combines the values they produced.",
+  },
+  {
     type: "delay",
     label: "Delay",
     description: "Pause durably, then continue",

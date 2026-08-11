@@ -426,6 +426,36 @@ function InspectorConfiguration({
           <Text label="Template" multiline value={str("template")} onChange={(v) => set("template", v)} />
         )}
 
+        {type === "forEach" && (
+          <>
+            <Text
+              label="List path"
+              value={str("path", "items")}
+              onChange={(v) => set("path", v)}
+              hint="Use a dotted path such as messages. Leave blank when the input itself is a list."
+            />
+            <Text
+              label="Template for each item"
+              multiline
+              value={str("template", "{{input}}")}
+              onChange={(v) => set("template", v)}
+              hint="The template runs once per item and cannot execute code."
+            />
+          </>
+        )}
+
+        {type === "merge" && (
+          <label className="field">
+            <span>Merge mode</span>
+            <select value={str("mode", "append")} onChange={(e) => set("mode", e.target.value)}>
+              <option value="append">Append items</option>
+              <option value="combine">Combine object fields</option>
+              <option value="first">Use first result</option>
+            </select>
+            <span className="field-hint">The step waits for every connected branch that produced a result.</span>
+          </label>
+        )}
+
         {type === "delay" && (
           <Num
             label="Wait time (seconds)"
@@ -560,6 +590,22 @@ export function Inspector({
               type="checkbox"
               checked={config.executionMode !== "live"}
               onChange={(e) => set("executionMode", e.target.checked ? "demo" : "live")}
+            />
+          </label>
+        </section>
+      )}
+
+      {!type.endsWith("Trigger") && !["condition", "output", "daytonaSandbox"].includes(type) && (
+        <section className="inspector-section">
+          <label className="switch-row">
+            <span>
+              <strong>Route failures to an error branch</strong>
+              <small>Adds an error output you can connect to recovery steps</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={config.errorOutput === true}
+              onChange={(e) => set("errorOutput", e.target.checked)}
             />
           </label>
         </section>
