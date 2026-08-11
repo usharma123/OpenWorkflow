@@ -5,6 +5,13 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
 
+/*
+ * React Flow's stylesheet must load BEFORE ours. It used to be imported from
+ * the lazy-loaded editor route, which put it last in the document and silently
+ * beat every .react-flow__* override in canvas.css on a specificity tie.
+ */
+@import "@xyflow/react/dist/style.css";
+
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/app.css";

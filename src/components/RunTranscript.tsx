@@ -7,10 +7,13 @@ import {
   MessageSquare,
   Play,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { LatestRunResult, PendingApproval, RunStepSummary, WorkflowNodeType } from "../types";
-import { Markdown } from "./Markdown";
 import { NodeMark } from "./icons";
+
+const Markdown = lazy(() =>
+  import("./Markdown").then((module) => ({ default: module.Markdown })),
+);
 
 interface RunTranscriptProps {
   result?: LatestRunResult;
@@ -199,7 +202,11 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
       {step.status === "running" && !content && (
         <p className="tx-thinking shimmer">Writing the brief…</p>
       )}
-      {content && <Markdown>{content}</Markdown>}
+      {content && (
+        <Suspense fallback={<p className="tx-thinking">Formatting output…</p>}>
+          <Markdown>{content}</Markdown>
+        </Suspense>
+      )}
       {step.error && (
         <p className="tx-step-error">
           <CircleAlert size={14} /> {step.error}

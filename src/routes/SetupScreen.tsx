@@ -41,7 +41,7 @@ export function SetupScreen() {
   };
 
   return (
-    <main className="auth">
+    <main className="auth auth-single">
       <div className="auth-panel setup">
         <div className="auth-brand">
           <WorkflowMark size={20} />

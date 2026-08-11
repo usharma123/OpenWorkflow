@@ -1,7 +1,9 @@
 /*
- * The entire product palette. One neutral ramp on ink, plus a single reserved
- * red for failure and destructive intent. Brand colour appears only inside
- * vendor marks (see components/BrandMarks.tsx) and never in UI chrome.
+ * The product palette. One neutral ramp on ink for every surface and every
+ * piece of chrome, plus a single reserved red for failure. Hue appears in
+ * exactly two places: vendor marks (components/BrandMarks.tsx) and the
+ * per-category step accent below, which tints a node's glyph so the canvas is
+ * scannable at a glance. Nothing else is allowed colour.
  */
 :root {
   /* Neutral ramp, dark to light. */
@@ -30,6 +32,15 @@
   --text-secondary: var(--ink-8);
   --text-muted: var(--ink-7);
 
+  /* Step accents. Desaturated so a full canvas reads as one picture. */
+  --cat-start: #57c08a;
+  --cat-think: #a894f0;
+  --cat-compute: #63a2f0;
+  --cat-review: #e0ab5c;
+  --cat-deliver: #e0799f;
+  --cat-advanced: #8a8a99;
+  --accent: var(--cat-advanced);
+
   /* The only reserved hue in the product: failure and destructive intent. */
   --danger: #e5484d;
   --danger-text: #ff9ea1;
@@ -54,6 +65,14 @@
   --fast: 120ms;
   --normal: 200ms;
 }
+
+/* Any element carrying a category resolves --accent for its subtree. */
+[data-cat="Start"] { --accent: var(--cat-start); }
+[data-cat="Think"] { --accent: var(--cat-think); }
+[data-cat="Compute"] { --accent: var(--cat-compute); }
+[data-cat="Review"] { --accent: var(--cat-review); }
+[data-cat="Deliver"] { --accent: var(--cat-deliver); }
+[data-cat="Advanced"] { --accent: var(--cat-advanced); }
 
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -1,16 +1,29 @@
 import { AuthenticateWithRedirectCallback, ClerkProvider, useAuth } from "@clerk/react";
-import { ConvexProviderWithClerk } from "convex/react-clerk";
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { AppGate } from "./AppGate";
+import { AppLoading } from "./components/AppLoading";
 import { WorkflowMark } from "./components/WorkflowMark";
-import { convexClient } from "./lib/convexClient";
+import { SignInScreen } from "./routes/SignInScreen";
 
 const clerkKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY?.trim();
+const convexUrl = import.meta.env.VITE_CONVEX_URL?.trim();
+const AuthenticatedRoot = lazy(() => import("./AuthenticatedRoot"));
+
+function ClerkGate() {
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return <AppLoading message="Establishing a secure session…" />;
+  if (!isSignedIn) return <SignInScreen />;
+  return (
+    <Suspense fallback={<AppLoading message="Opening workspace…" />}>
+      <AuthenticatedRoot />
+    </Suspense>
+  );
+}
 
 export function AppRoot() {
-  if (!clerkKey || !convexClient) {
+  if (!clerkKey || !convexUrl) {
     return (
-      <main className="auth">
+      <main className="auth auth-single">
         <div className="auth-panel">
           <div className="auth-brand">
             <WorkflowMark size={20} />
@@ -48,11 +61,7 @@ export function AppRoot() {
           />
           <Route
             path="*"
-            element={
-              <ConvexProviderWithClerk client={convexClient} useAuth={useAuth}>
-                <AppGate />
-              </ConvexProviderWithClerk>
-            }
+            element={<ClerkGate />}
           />
         </Routes>
       </ClerkProvider>
