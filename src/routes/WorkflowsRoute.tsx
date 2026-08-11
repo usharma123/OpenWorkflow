@@ -118,7 +118,7 @@ export function WorkflowsRoute() {
       <div className="page-head page-head-row">
         <div>
           <h1>Workflows</h1>
-          <p>Each workflow is a sequence of steps that hands its result to the next one.</p>
+          <p>Every workflow in this account.</p>
         </div>
         <button className="btn btn-primary" disabled={busyId === "new"} onClick={() => void createWorkflow()}>
           <Plus size={14} /> {busyId === "new" ? "Creating…" : "New workflow"}
@@ -181,7 +181,7 @@ export function WorkflowsRoute() {
       {workflows?.length === 0 && (
         <div className="empty-state">
           <strong>No workflows yet</strong>
-          Create one to open a fresh starter canvas.
+          New workflows open on a starter canvas.
         </div>
       )}
     </div>

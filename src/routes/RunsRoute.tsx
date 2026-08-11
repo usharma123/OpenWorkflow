@@ -34,7 +34,7 @@ export function RunsRoute() {
     <div className="page">
       <div className="page-head">
         <h1>Runs</h1>
-        <p>Every execution, with the steps and output exactly as they happened.</p>
+        <p>Past executions and their output.</p>
       </div>
 
       {workflows && workflows.length > 0 && (

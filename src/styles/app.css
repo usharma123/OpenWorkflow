@@ -193,21 +193,27 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: 232px minmax(360px, 1fr) auto;
+  grid-template-columns: 244px minmax(360px, 1fr) auto;
   min-height: 0;
   overflow: hidden;
 }
 
 /* ---- Content pages ------------------------------------------------------- */
 
+/*
+ * Content routes grow with the window up to a readable ceiling, so a wide
+ * monitor gets more list and not more margin.
+ */
 .page {
-  max-width: 860px;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: 40px 32px 64px;
+  padding: 36px clamp(24px, 4vw, 56px) 72px;
 }
 
 .page-head {
-  margin-bottom: 28px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
 }
 
 .page-head-row {
@@ -254,9 +260,14 @@
   gap: 8px;
 }
 
-/* Row used by workflow list, run history, and connection lists. */
+/*
+ * Row used by workflow list, run history, and connection lists. The explicit
+ * width matters: a <button class="row"> shrink-wraps to its content otherwise,
+ * so each run in the list came out a different length.
+ */
 .row {
   display: grid;
+  width: 100%;
   grid-template-columns: 32px 1fr auto;
   align-items: center;
   gap: 12px;
@@ -428,7 +439,7 @@ button.row:hover,
 
 @media (max-width: 1180px) {
   .workspace {
-    grid-template-columns: 200px minmax(300px, 1fr) auto;
+    grid-template-columns: 208px minmax(300px, 1fr) auto;
   }
 }
 

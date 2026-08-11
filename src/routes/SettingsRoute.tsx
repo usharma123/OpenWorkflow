@@ -12,7 +12,7 @@ export function SettingsRoute() {
     <div className="page">
       <div className="page-head">
         <h1>Settings</h1>
-        <p>Your account and what OpenWorkflow is allowed to reach on your behalf.</p>
+        <p>Your account and its granted access.</p>
       </div>
 
       <section className="page-section">
@@ -77,8 +77,8 @@ export function SettingsRoute() {
         <ShieldCheck size={15} />
         <span>
           <strong>What is stored</strong>
-          Google account metadata is kept in Convex, but Google tokens are not — each action asks
-          Clerk for a current token and verifies the exact scopes it needs.
+          Account metadata is kept in Convex. Google tokens are not: each action asks Clerk for a
+          current token and checks its scopes.
         </span>
       </div>
     </div>

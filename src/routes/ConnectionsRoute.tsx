@@ -62,10 +62,7 @@ export function ConnectionsRoute() {
     <div className="page">
       <div className="page-head">
         <h1>Connections</h1>
-        <p>
-          Google grants stay in Clerk and are fetched fresh for every action. Slack tokens are
-          encrypted server-side and never returned to this browser.
-        </p>
+        <p>The accounts your steps are allowed to use.</p>
       </div>
 
       <section className="page-section">
@@ -119,10 +116,9 @@ export function ConnectionsRoute() {
       <div className="note">
         <ShieldCheck size={15} />
         <span>
-          <strong>Least privilege, per owner</strong>
-          Every workflow, run, approval, webhook, and connection is bound to your user or active
-          organization. Missing or expired grants stop a run rather than falling back to something
-          less safe.
+          <strong>Scoped to you</strong>
+          Google grants stay in Clerk and Slack tokens are encrypted server-side. A missing or
+          expired grant stops the run.
         </span>
       </div>
     </div>
