@@ -277,6 +277,51 @@
   color: var(--danger-text);
 }
 
+.runtime-agent-node {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 190px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, #6d8cff 48%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, #6d8cff 8%, var(--surface-raised));
+  box-shadow: var(--shadow);
+  color: var(--text-secondary);
+}
+
+.runtime-agent-node.is-failed {
+  border-color: var(--danger-border);
+}
+
+.runtime-agent-node strong,
+.runtime-agent-node small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-agent-node strong {
+  color: var(--text);
+  font-size: 9px;
+}
+
+.runtime-agent-node small {
+  color: var(--text-muted);
+  font-size: 7px;
+}
+
+.runtime-agent-node > em {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
 /* A condition needs room for its two branch labels beside the outputs. */
 .wf-node.is-condition,
 .wf-node.has-error-output {

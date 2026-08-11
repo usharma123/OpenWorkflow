@@ -10,6 +10,7 @@ import {
   extractToolCalls,
   inferArtifactType,
   inferMediaType,
+  isAgentTimeoutError,
   isSandboxTool,
   knownArtifactPaths,
   looksLikeLeakedToolCall,
@@ -54,6 +55,10 @@ type OpenRouterMessage = {
 };
 
 const MODEL_ROUND_TIMEOUT_MS = 60_000;
+// Production actions were observed being terminated at ~255s. Keep enough
+// headroom to persist results and let the workflow engine journal completion.
+const MAX_AGENT_ACTION_SECONDS = 220;
+const FINAL_SYNTHESIS_RESERVE_MS = 35_000;
 const MAX_TOOL_RESULT_CHARS = 24_000;
 
 function daytonaClient() {
@@ -98,6 +103,32 @@ async function searchWeb(query: string, numResults: number) {
   }
   const results = parseExaSearchResponse(await response.json());
   return { query, results, count: results.length, source: "exa" };
+}
+
+/** Exa's general Search endpoint accepts one query per request. A batch tool
+ * call fans those requests out concurrently so the model pays one round-trip
+ * instead of serially deciding and waiting for every search. */
+async function batchSearchWeb(queries: string[], numResults: number) {
+  const searches = await Promise.all(queries.map(async (query) => {
+    try {
+      return { ok: true as const, ...(await searchWeb(query, numResults)) };
+    } catch (error) {
+      return {
+        ok: false as const,
+        query,
+        results: [],
+        count: 0,
+        source: "exa",
+        error: error instanceof Error ? error.message : "Web search failed.",
+      };
+    }
+  }));
+  return {
+    searches,
+    queryCount: searches.length,
+    resultCount: searches.reduce((count, search) => count + search.count, 0),
+    source: "exa",
+  };
 }
 
 const MAX_FETCH_REDIRECTS = 5;
@@ -180,7 +211,7 @@ async function openRouterChat(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    if (isAgentTimeoutError(error)) {
       throw new Error(`OpenRouter model round timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`);
     }
     throw error;
@@ -337,30 +368,64 @@ async function runToolLoop(options: {
   toolTrace: AgentToolTraceEntry[];
   dispatch: (name: AgentToolName, args: Record<string, unknown>) => Promise<unknown>;
   onProgress?: (content: string) => Promise<void>;
+  fallbackContent?: () => string;
 }): Promise<{ content: string; usage?: unknown }> {
-  const { apiKey, model, messages, tools, allowedTools, maxRounds, deadline, toolTrace, dispatch, onProgress } = options;
+  const {
+    apiKey,
+    model,
+    messages,
+    tools,
+    allowedTools,
+    maxRounds,
+    deadline,
+    toolTrace,
+    dispatch,
+    onProgress,
+    fallbackContent,
+  } = options;
   let usage: unknown;
   let content = "";
   let refusalNudges = 0;
+  let synthesizeNextRound = false;
+
+  const checkpoint = () => fallbackContent?.().trim() || content.trim();
 
   for (let round = 0; round <= maxRounds; round += 1) {
-    if (Date.now() > deadline) throw new Error("Agent timed out before finishing.");
+    if (Date.now() > deadline) {
+      const fallback = checkpoint();
+      if (fallback) return { content: fallback, usage };
+      throw new Error("Agent timed out before finishing.");
+    }
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) throw new Error("Agent timed out before finishing.");
-    const roundTimeoutMs = Math.max(1_000, Math.min(MODEL_ROUND_TIMEOUT_MS, remainingMs));
-    const finalRound = round >= maxRounds;
+    if (remainingMs <= 6_000) {
+      const fallback = checkpoint();
+      if (fallback) return { content: fallback, usage };
+      throw new Error("Agent timed out before finishing.");
+    }
+    const finalRound = synthesizeNextRound || round >= maxRounds || remainingMs <= FINAL_SYNTHESIS_RESERVE_MS;
+    const roundTimeoutMs = Math.max(
+      1_000,
+      Math.min(MODEL_ROUND_TIMEOUT_MS, remainingMs - (finalRound ? 5_000 : 0)),
+    );
     const forceTools = refusalNudges > 0 && toolTrace.length === 0;
     await onProgress?.(
       [content.trim(), `Waiting for model response (round ${round + 1})…`].filter(Boolean).join("\n\n"),
     );
-    const completion = await openRouterChat(
-      apiKey,
-      model,
-      messages,
-      finalRound ? undefined : tools,
-      roundTimeoutMs,
-      finalRound ? "none" : forceTools ? "required" : "auto",
-    );
+    let completion: Awaited<ReturnType<typeof openRouterChat>>;
+    try {
+      completion = await openRouterChat(
+        apiKey,
+        model,
+        messages,
+        finalRound ? undefined : tools,
+        roundTimeoutMs,
+        finalRound ? "none" : forceTools ? "required" : "auto",
+      );
+    } catch (error) {
+      const fallback = finalRound || isAgentTimeoutError(error) ? checkpoint() : "";
+      if (fallback) return { content: fallback, usage };
+      throw error;
+    }
     usage = completion.usage ?? usage;
     const message = completion.message;
     const toolCalls = extractToolCalls(message);
@@ -402,7 +467,11 @@ async function runToolLoop(options: {
     if (finalRound) break;
 
     for (const call of toolCalls) {
-      if (Date.now() > deadline) throw new Error("Agent timed out while running tools.");
+      if (Date.now() > deadline) {
+        const fallback = checkpoint();
+        if (fallback) return { content: fallback, usage };
+        throw new Error("Agent timed out while running tools.");
+      }
       const name = call.function?.name ?? "";
       let toolResult: unknown;
       let ok = true;
@@ -425,6 +494,7 @@ async function runToolLoop(options: {
             }
           : {};
       toolTrace.push({ tool: (name as AgentToolName) || "run_code", summary, ok, ...planMarker });
+      if (name === "spawn_subagents" && ok) synthesizeNextRound = true;
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -438,13 +508,15 @@ async function runToolLoop(options: {
 }
 
 const SUBAGENT_MAX_ROUNDS = 4;
-const SUBAGENT_TIMEOUT_MS = 180_000;
+const SUBAGENT_TIMEOUT_MS = 90_000;
 
 /** One parallel research child: web search + fetch only, no sandbox, no recursion. */
 async function runSubagentTask(
+  ctx: ActionCtx,
   apiKey: string,
   model: string,
   task: SubagentTask,
+  agentTaskId: import("./_generated/dataModel").Id<"agentTasks">,
   parentDeadline: number,
 ): Promise<SubagentResult> {
   const citations: Array<{ title: string; url: string }> = [];
@@ -454,7 +526,8 @@ async function runSubagentTask(
       role: "system",
       content: [
         "You are a focused research subagent working on one task for a lead agent.",
-        "Use web_search and fetch_url to investigate the objective, then reply with a concise, well-organized summary of what you found.",
+        "Use batch_web_search when you know several independent queries; use web_search for a single follow-up and fetch_url only for the strongest sources.",
+        "Investigate the objective, then reply with a concise, well-organized summary of what you found.",
         "Never invent URLs; cite only sources you retrieved. Lead with the findings that matter most.",
       ].join(" "),
     },
@@ -463,6 +536,12 @@ async function runSubagentTask(
   const deadline = Math.min(parentDeadline, Date.now() + SUBAGENT_TIMEOUT_MS);
 
   try {
+    await ctx.runMutation(internal.executor.updateAgentTask, {
+      agentTaskId,
+      status: "running",
+      partialOutput: "Starting research…",
+      toolTrace: [],
+    });
     const { content } = await runToolLoop({
       apiKey,
       model,
@@ -482,6 +561,20 @@ async function runSubagentTask(
           }
           return result;
         }
+        if (name === "batch_web_search") {
+          const result = await batchSearchWeb(
+            toolArgs.queries as string[],
+            Number(toolArgs.numResults),
+          );
+          for (const search of result.searches) {
+            for (const item of search.results as Array<{ title: string; url: string }>) {
+              if (item.url && !citations.some((citation) => citation.url === item.url)) {
+                citations.push({ title: item.title, url: item.url });
+              }
+            }
+          }
+          return result;
+        }
         const url = String(toolArgs.url);
         const result = await fetchPublicUrl(url, Number(toolArgs.maxChars));
         if (!citations.some((citation) => citation.url === url)) {
@@ -489,8 +582,16 @@ async function runSubagentTask(
         }
         return result;
       },
+      onProgress: async (progressContent) => {
+        await ctx.runMutation(internal.executor.updateAgentTask, {
+          agentTaskId,
+          status: "running",
+          partialOutput: progressContent,
+          toolTrace,
+        });
+      },
     });
-    return {
+    const result = {
       name: task.name,
       objective: task.objective,
       content: content.trim() || "The subagent finished without a summary.",
@@ -498,15 +599,35 @@ async function runSubagentTask(
       toolTrace,
       ok: true,
     };
+    await ctx.runMutation(internal.executor.updateAgentTask, {
+      agentTaskId,
+      status: "completed",
+      partialOutput: result.content,
+      toolTrace,
+      content: result.content,
+      citations,
+    });
+    return result;
   } catch (error) {
-    return {
+    const message = error instanceof Error ? error.message : "The subagent failed.";
+    const result = {
       name: task.name,
       objective: task.objective,
-      content: error instanceof Error ? error.message : "The subagent failed.",
+      content: message,
       citations,
       toolTrace,
       ok: false,
     };
+    await ctx.runMutation(internal.executor.updateAgentTask, {
+      agentTaskId,
+      status: "failed",
+      partialOutput: message,
+      toolTrace,
+      content: message,
+      citations,
+      error: message,
+    }).catch(() => undefined);
+    return result;
   }
 }
 
@@ -589,6 +710,7 @@ export const runAgent = internalAction({
       : [...COMPUTE_TOOLS, "spawn_subagents"];
     const systemPrompt = [
       args.systemPrompt || defaultComputeSystemPrompt(),
+      "When you already know multiple independent search queries, call batch_web_search once instead of issuing serial web_search calls.",
       "For broad research you can delegate independent sub-tasks to parallel subagents with spawn_subagents; each returns a cited summary.",
       ...(hasPlan ? [planPromptSection(plan)] : []),
     ].join("\n\n");
@@ -605,7 +727,7 @@ export const runAgent = internalAction({
     const subagents: SubagentResult[] = [];
     let sandbox: Sandbox | undefined;
     let daytona: Daytona | undefined;
-    const deadline = Date.now() + Math.min(900, Math.max(30, args.timeoutSeconds)) * 1000;
+    const deadline = Date.now() + Math.min(MAX_AGENT_ACTION_SECONDS, Math.max(30, args.timeoutSeconds)) * 1000;
     const maxRounds = Math.min(20, Math.max(1, Math.trunc(args.maxToolRounds)));
 
     const publishFromPath = async (path: string, type: AgentArtifact["type"], mediaType: string) => {
@@ -634,6 +756,20 @@ export const runAgent = internalAction({
           for (const item of result.results as Array<{ title: string; url: string }>) {
             if (item.url && !citations.some((citation) => citation.url === item.url)) {
               citations.push({ title: item.title, url: item.url });
+            }
+          }
+          return result;
+        }
+        case "batch_web_search": {
+          const result = await batchSearchWeb(
+            toolArgs.queries as string[],
+            Number(toolArgs.numResults),
+          );
+          for (const search of result.searches) {
+            for (const item of search.results as Array<{ title: string; url: string }>) {
+              if (item.url && !citations.some((citation) => citation.url === item.url)) {
+                citations.push({ title: item.title, url: item.url });
+              }
             }
           }
           return result;
@@ -698,9 +834,18 @@ export const runAgent = internalAction({
         }
         case "spawn_subagents": {
           const tasks = toolArgs.tasks as SubagentTask[];
-          const results = await Promise.all(
-            tasks.map((task) => runSubagentTask(apiKey, args.model, task, deadline)),
-          );
+          const registrations = await ctx.runMutation(internal.executor.registerAgentTasks, {
+            stepRunId: args.stepRunId,
+            tasks,
+          });
+          const results = await Promise.all(tasks.map((task, index) => {
+            const registration = registrations[index];
+            if (!registration) throw new Error("Subagent registration failed.");
+            if (registration.cached && registration.result) {
+              return registration.result as SubagentResult;
+            }
+            return runSubagentTask(ctx, apiKey, args.model, task, registration.id, deadline);
+          }));
           for (const result of results) {
             subagents.push(result);
             for (const citation of result.citations) {
@@ -737,6 +882,19 @@ export const runAgent = internalAction({
         toolTrace,
         dispatch,
         onProgress: (progressContent) => patchPartial(ctx, args.stepRunId, progressContent, toolTrace),
+        fallbackContent: () => {
+          const findings = subagents.map(
+            (result) => `\n### ${result.name}\n${result.content.slice(0, 6_000)}`,
+          );
+          const sources = citations.slice(0, 20).map((citation) => `- [${citation.title}](${citation.url})`);
+          if (!findings.length && !sources.length && !toolTrace.length) return "";
+          return [
+            "## Research checkpoint",
+            "The agent reached its execution budget and preserved the work completed so far.",
+            ...findings,
+            ...(sources.length ? ["\n### Retrieved sources", ...sources] : []),
+          ].join("\n");
+        },
       });
       let content = loop.content;
       const usage = loop.usage;

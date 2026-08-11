@@ -130,6 +130,40 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   }).index("by_run", ["runId"]),
 
+  /** Durable runtime children spawned by an AI step. These are execution state,
+   * not workflow-definition nodes, so the editor can visualize them live
+   * without accidentally saving them into the authored graph. */
+  agentTasks: defineTable({
+    ownerKey: v.string(),
+    runId: v.id("workflowRuns"),
+    stepRunId: v.id("stepRuns"),
+    taskKey: v.string(),
+    name: v.string(),
+    objective: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    attempt: v.number(),
+    partialOutput: v.optional(v.string()),
+    toolTrace: v.optional(
+      v.array(v.object({
+        tool: v.string(),
+        summary: v.string(),
+        ok: v.boolean(),
+      })),
+    ),
+    content: v.optional(v.string()),
+    citations: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
+    error: v.optional(v.string()),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_run", ["runId"])
+    .index("by_step", ["stepRunId"]),
+
   connections: defineTable({
     // Transitional optionals allow deployment over pre-auth POC rows. The
     // scheduled legacy cleanup removes rows that cannot be owner-isolated.

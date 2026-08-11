@@ -436,12 +436,14 @@ export const remove = mutation({
       ctx.db.query("runClaims").withIndex("by_workflow_key", (q) => q.eq("workflowId", workflowId)).collect(),
     ]);
     await Promise.all(runs.map(async (run) => {
-      const [steps, auditLogs] = await Promise.all([
+      const [steps, agentTasks, auditLogs] = await Promise.all([
         ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+        ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
         ctx.db.query("auditLogs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
       ]);
       await Promise.all([
         ...steps.map((step) => ctx.db.delete(step._id)),
+        ...agentTasks.map((task) => ctx.db.delete(task._id)),
         ...auditLogs.map((auditLog) => ctx.db.delete(auditLog._id)),
       ]);
       await ctx.db.delete(run._id);

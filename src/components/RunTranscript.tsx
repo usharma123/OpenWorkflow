@@ -213,6 +213,7 @@ function ToolCallRow({ step }: { step: RunStepSummary }) {
 /* --- Agent activity (tool trace) grouped under the plan checklist --- */
 
 interface TraceRow {
+  key: string;
   tool: string;
   summary: string;
   ok: boolean;
@@ -222,6 +223,7 @@ interface TraceRow {
 
 const TOOL_ICONS: Record<string, typeof Search> = {
   web_search: Search,
+  batch_web_search: Search,
   fetch_url: Globe,
   run_code: Terminal,
   run_shell: Terminal,
@@ -235,17 +237,25 @@ const TOOL_ICONS: Record<string, typeof Search> = {
 /* Normalize persisted or streamed trace entries; `[name] ` prefixes become badges. */
 function parseTrace(raw: unknown): TraceRow[] {
   if (!Array.isArray(raw)) return [];
+  const occurrences = new Map<string, number>();
   return raw.flatMap((item) => {
     const entry = record(item);
     const rawSummary = typeof entry.summary === "string" ? entry.summary : "";
     if (!rawSummary) return [];
     const prefix = /^\[([^\]]{1,60})\]\s+/.exec(rawSummary);
+    const tool = typeof entry.tool === "string" ? entry.tool : "";
+    const subagent = prefix?.[1];
+    const summary = prefix ? rawSummary.slice(prefix[0].length) : rawSummary;
+    const baseKey = `${tool}:${subagent ?? ""}:${summary}`;
+    const occurrence = (occurrences.get(baseKey) ?? 0) + 1;
+    occurrences.set(baseKey, occurrence);
     return [
       {
-        tool: typeof entry.tool === "string" ? entry.tool : "",
-        summary: prefix ? rawSummary.slice(prefix[0].length) : rawSummary,
+        key: `${baseKey}:${occurrence}`,
+        tool,
+        summary,
         ok: entry.ok !== false,
-        subagent: prefix?.[1],
+        subagent,
         stepIndex: typeof entry.stepIndex === "number" ? entry.stepIndex : undefined,
       },
     ];
@@ -292,7 +302,7 @@ function ActivityList({ rows, live }: { rows: TraceRow[]; live?: boolean }) {
         const isNewest = live && index === rows.length - 1;
         return (
           <li
-            key={`${index}-${row.summary.slice(0, 40)}`}
+            key={row.key}
             className={`tx-activity-row${row.ok ? "" : " is-failed"}${isNewest ? " is-live" : ""}`}
           >
             <Icon size={13} aria-hidden="true" />
@@ -370,7 +380,7 @@ function PlanActivity({ plan, trace, live }: { plan: RunStepPlan; trace: TraceRo
         )}
         {plan.steps.map((planStep, index) => (
           <ActivityGroup
-            key={`${index}-${planStep.title}`}
+            key={planStep.title}
             label={planStep.title}
             labelClass={`is-${planStep.status}`}
             mark={<PlanStepMark status={planStep.status} />}
@@ -388,20 +398,30 @@ const ACTIVITY_PREVIEW_COUNT = 6;
 
 /* Standalone activity card for agent runs without a plan. */
 function ActivityCard({ trace, live }: { trace: TraceRow[]; live: boolean }) {
+  const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const rows = trace.filter((row) => row.tool !== "mark_plan_step");
   if (!rows.length) return null;
+  const failed = rows.filter((row) => !row.ok).length;
   const hidden = showAll ? 0 : Math.max(0, rows.length - ACTIVITY_PREVIEW_COUNT);
   const visible = hidden ? rows.slice(hidden) : rows;
   return (
     <div className="tx-plan tx-activity-card">
-      <span className="t-eyebrow">Activity</span>
-      {hidden > 0 && (
-        <button type="button" className="link-btn tx-activity-more" onClick={() => setShowAll(true)}>
-          Show all {rows.length}
-        </button>
+      <button type="button" className="tx-section-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        <ChevronRight className={`tx-caret ${open ? "is-open" : ""}`} size={12} />
+        <span>Activity</span>
+        <small>{rows.length} actions{failed ? ` · ${failed} failed` : ""}</small>
+      </button>
+      {open && (
+        <>
+          {hidden > 0 && (
+            <button type="button" className="link-btn tx-activity-more" onClick={() => setShowAll(true)}>
+              Show all {rows.length}
+            </button>
+          )}
+          <ActivityList rows={visible} live={live} />
+        </>
       )}
-      <ActivityList rows={visible} live={live} />
     </div>
   );
 }
@@ -410,22 +430,33 @@ function ActivityCard({ trace, live }: { trace: TraceRow[]; live: boolean }) {
 function SubagentBlock({
   subagent,
 }: {
-  subagent: { name: string; ok: boolean; content: string; citations: Citation[] };
+  subagent: {
+    name: string;
+    status: "queued" | "running" | "completed" | "failed";
+    content: string;
+    citations: Citation[];
+  };
 }) {
   const [open, setOpen] = useState(false);
+  const failed = subagent.status === "failed";
+  const live = subagent.status === "queued" || subagent.status === "running";
   return (
-    <div className={`tx-subagent ${subagent.ok ? "" : "is-failed"}`}>
+    <div className={`tx-subagent ${failed ? "is-failed" : ""}`}>
       <button className="tx-tool-row" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <ChevronRight className={`tx-caret ${open ? "is-open" : ""}`} size={13} />
         <span className="tx-tool-label">Subagent · {subagent.name}</span>
-        {!subagent.ok && <span className="tx-tool-summary">failed</span>}
-        <span className={`dot ${subagent.ok ? "dot-done" : "dot-failed"}`} />
+        <span className={`tx-tool-summary ${live ? "shimmer" : ""}`}>{subagent.status}</span>
+        <span className={`dot ${live ? "dot-running" : failed ? "dot-failed" : "dot-done"}`} />
       </button>
       {open && (
         <div className="tx-subagent-body">
-          <Suspense fallback={<p className="tx-thinking">Formatting…</p>}>
-            <Markdown>{subagent.content.slice(0, 6_000)}</Markdown>
-          </Suspense>
+          {subagent.content ? (
+            <Suspense fallback={<p className="tx-thinking">Formatting…</p>}>
+              <Markdown>{subagent.content.slice(0, 6_000)}</Markdown>
+            </Suspense>
+          ) : (
+            <p className="tx-thinking shimmer">Starting research…</p>
+          )}
           {subagent.citations.length > 0 && (
             <div className="tx-sources">
               <span className="t-eyebrow">Sources</span>
@@ -438,6 +469,44 @@ function SubagentBlock({
               ))}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubagentsPanel({
+  subagents,
+}: {
+  subagents: Array<{
+    name: string;
+    status: "queued" | "running" | "completed" | "failed";
+    content: string;
+    citations: Citation[];
+  }>;
+}) {
+  const active = subagents.filter((subagent) => subagent.status === "queued" || subagent.status === "running").length;
+  const completed = subagents.filter((subagent) => subagent.status === "completed").length;
+  const failed = subagents.filter((subagent) => subagent.status === "failed").length;
+  const [openOverride, setOpenOverride] = useState<boolean | undefined>(undefined);
+  const open = openOverride ?? active > 0;
+  return (
+    <div className="tx-subagents-panel">
+      <button type="button" className="tx-section-toggle" onClick={() => setOpenOverride(!open)} aria-expanded={open}>
+        <ChevronRight className={`tx-caret ${open ? "is-open" : ""}`} size={12} />
+        <span>Subagents</span>
+        <small>
+          {subagents.length} total
+          {active ? ` · ${active} active` : ""}
+          {completed ? ` · ${completed} done` : ""}
+          {failed ? ` · ${failed} failed` : ""}
+        </small>
+      </button>
+      {open && (
+        <div className="tx-subagents">
+          {subagents.map((subagent) => (
+            <SubagentBlock key={subagent.name} subagent={subagent} />
+          ))}
         </div>
       )}
     </div>
@@ -501,9 +570,10 @@ function PlanReviewCard({
 }
 
 /* The model step is the content the run exists to produce, so it renders open. */
-function ModelBlock({ step }: { step: RunStepSummary }) {
+function ModelBlock({ step, defaultOpen }: { step: RunStepSummary; defaultOpen: boolean }) {
   const [copied, setCopied] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [openOverride, setOpenOverride] = useState<boolean | undefined>(undefined);
   const out = record(step.output);
   const content = typeof out.content === "string" ? out.content : step.partialOutput ?? "";
   const citations = useMemo(() => citationsOf(step.output), [step.output]);
@@ -525,13 +595,13 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
     });
   }, [out.artifacts]);
   const subagents = useMemo(() => {
-    const raw = out.subagents;
+    const raw = Array.isArray(out.subagents) ? out.subagents : step.agents;
     if (!Array.isArray(raw)) return [];
     return raw.flatMap((item) => {
       const entry = record(item);
       const name = typeof entry.name === "string" ? entry.name : "";
       const subagentContent = typeof entry.content === "string" ? entry.content : "";
-      if (!name || !subagentContent) return [];
+      if (!name) return [];
       const subagentCitations = Array.isArray(entry.citations)
         ? (entry.citations as unknown[]).flatMap((citation) => {
             const record_ = record(citation);
@@ -540,10 +610,17 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
               : [];
           })
         : [];
-      return [{ name, ok: entry.ok !== false, content: subagentContent, citations: subagentCitations }];
+      const rawStatus = typeof entry.status === "string" ? entry.status : entry.ok === false ? "failed" : "completed";
+      const status = (["queued", "running", "completed", "failed"] as const).find((value) => value === rawStatus) ?? "completed";
+      const content = subagentContent || (typeof entry.partialOutput === "string" ? entry.partialOutput : "");
+      return [{ name, status, content, citations: subagentCitations }];
     });
-  }, [out.subagents]);
+  }, [out.subagents, step.agents]);
   const duration = formatDuration(step.startedAt, step.completedAt);
+  const actionCount = trace.filter((entry) => entry.tool !== "mark_plan_step").length;
+  const open = openOverride ?? (
+    defaultOpen && step.status !== "completed" && step.status !== "failed"
+  );
 
   const copy = async () => {
     await navigator.clipboard.writeText(content);
@@ -552,14 +629,24 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
   };
 
   return (
-    <div className="tx-model">
+    <div className={`tx-model${open ? " is-open" : ""}${step.status === "failed" ? " is-failed" : ""}`}>
       <div className="tx-model-head">
-        <span className="tx-tool-mark">
-          <NodeMark type="ai" size={14} />
-        </span>
-        <span className="tx-tool-label">{step.nodeLabel}</span>
-        <StatusMark status={step.status} />
-        {duration && <span className="t-mono tx-tool-time">{duration}</span>}
+        <button type="button" className="tx-model-toggle" onClick={() => setOpenOverride(!open)} aria-expanded={open}>
+          <ChevronRight className={`tx-caret ${open ? "is-open" : ""}`} size={13} />
+          <span className="tx-tool-mark">
+            <NodeMark type="ai" size={14} />
+          </span>
+          <span className="tx-tool-label">{step.nodeLabel}</span>
+          {(subagents.length > 0 || actionCount > 0) && (
+            <span className="tx-model-meta">
+              {subagents.length > 0 ? `${subagents.length} agent${subagents.length === 1 ? "" : "s"}` : ""}
+              {subagents.length > 0 && actionCount > 0 ? " · " : ""}
+              {actionCount > 0 ? `${actionCount} actions` : ""}
+            </span>
+          )}
+          <StatusMark status={step.status} />
+          {duration && <span className="t-mono tx-tool-time">{duration}</span>}
+        </button>
         {content && (
           <button className="icon-btn tx-copy" onClick={() => void copy()} title="Copy" aria-label="Copy output">
             {copied ? <Check size={14} /> : <Clipboard size={14} />}
@@ -567,35 +654,31 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
         )}
       </div>
 
-      {step.plan && step.plan.status !== "rejected" ? (
-        <PlanActivity plan={step.plan} trace={trace} live={step.status === "running"} />
-      ) : (
-        trace.length > 0 && <ActivityCard trace={trace} live={step.status === "running"} />
-      )}
+      {open && (
+        <div className="tx-model-body">
+          {step.plan && step.plan.status !== "rejected" ? (
+            <PlanActivity plan={step.plan} trace={trace} live={step.status === "running"} />
+          ) : (
+            trace.length > 0 && <ActivityCard trace={trace} live={step.status === "running"} />
+          )}
 
-      {subagents.length > 0 && (
-        <div className="tx-subagents">
-          {subagents.map((subagent) => (
-            <SubagentBlock key={subagent.name} subagent={subagent} />
-          ))}
-        </div>
-      )}
+          {subagents.length > 0 && <SubagentsPanel subagents={subagents} />}
 
-      {step.status === "running" && !content && (
-        <p className="tx-thinking shimmer">Working…</p>
-      )}
-      {content && (
-        <Suspense fallback={<p className="tx-thinking">Formatting output…</p>}>
-          <Markdown>{content}</Markdown>
-        </Suspense>
-      )}
-      {step.error && (
-        <p className="tx-step-error">
-          <CircleAlert size={14} /> {step.error}
-        </p>
-      )}
+          {step.status === "running" && !content && (
+            <p className="tx-thinking shimmer">Working…</p>
+          )}
+          {content && (
+            <Suspense fallback={<p className="tx-thinking">Formatting output…</p>}>
+              <Markdown>{content}</Markdown>
+            </Suspense>
+          )}
+          {step.error && (
+            <p className="tx-step-error">
+              <CircleAlert size={14} /> {step.error}
+            </p>
+          )}
 
-      {artifacts.length > 0 && (
+          {artifacts.length > 0 && (
         <div className="tx-artifacts">
           <span className="t-eyebrow">Artifacts</span>
           {artifacts.map((artifact) => {
@@ -625,9 +708,9 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
             );
           })}
         </div>
-      )}
+          )}
 
-      {previewHtml && (
+          {previewHtml && (
         <div className="tx-html-preview">
           <div className="tx-html-preview-head">
             <strong>Dashboard preview</strong>
@@ -637,9 +720,9 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
           </div>
           <iframe title="Dashboard preview" sandbox="" srcDoc={previewHtml} />
         </div>
-      )}
+          )}
 
-      {citations.length > 0 && (
+          {citations.length > 0 && (
         <div className="tx-sources">
           <span className="t-eyebrow">Sources</span>
           {citations.map((citation, index) => (
@@ -649,6 +732,8 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
               <ExternalLink size={12} />
             </a>
           ))}
+        </div>
+          )}
         </div>
       )}
     </div>
@@ -706,7 +791,14 @@ export function RunTranscript({
   running,
 }: RunTranscriptProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [now, setNow] = useState(() => Date.now());
   const steps = result?.steps ?? [];
+
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [running]);
 
   // Follow the run as steps land, which is what makes it read as a conversation.
   useEffect(() => {
@@ -730,17 +822,22 @@ export function RunTranscript({
 
   const total = steps.length;
   const done = steps.filter((step) => step.status === "completed").length;
-  const elapsed = steps.reduce(
-    (sum, step) => sum + ((step.completedAt ?? step.startedAt) - step.startedAt),
-    0,
-  );
+  const active = steps.filter((step) => step.status === "running" || step.status === "waiting").length;
+  const firstStartedAt = steps.length ? Math.min(...steps.map((step) => step.startedAt)) : 0;
+  const lastCompletedAt = steps.reduce((latest, step) => Math.max(latest, step.completedAt ?? 0), 0);
+  const elapsed = firstStartedAt ? Math.max(0, (running ? now : lastCompletedAt || now) - firstStartedAt) : 0;
+  const defaultOpenModelId = steps.find(
+    (step) => step.nodeType === "ai" && (step.status === "running" || step.status === "waiting"),
+  )?.id;
 
   return (
     <div className="tx" ref={scrollRef}>
       <div className="tx-summary">
         <span className="t-mono">{result.id ? `run_${result.id.slice(-6)}` : "queued"}</span>
         <span className="t-mono">
-          {done}/{total || "—"} steps
+          {running
+            ? `${done} done · ${active} active · ${total} started`
+            : `${done}/${total || "—"} steps`}
         </span>
         {elapsed > 0 && <span className="t-mono">{(elapsed / 1000).toFixed(1)}s</span>}
       </div>
@@ -779,7 +876,9 @@ export function RunTranscript({
             />
           );
         }
-        if (step.nodeType === "ai") return <ModelBlock key={step.id} step={step} />;
+        if (step.nodeType === "ai") {
+          return <ModelBlock key={step.id} step={step} defaultOpen={step.id === defaultOpenModelId} />;
+        }
         return <ToolCallRow key={step.id} step={step} />;
       })}
 

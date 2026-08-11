@@ -853,24 +853,74 @@
 
 /* Model output block */
 .tx-model {
-  margin: 10px 0 14px;
-  padding: 12px 14px 4px;
+  margin: 6px 0;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-raised);
+  overflow: hidden;
+}
+
+.tx-model.is-failed {
+  border-color: var(--danger-border);
 }
 
 .tx-model-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 10px;
-  margin-bottom: 4px;
+  min-width: 0;
+}
+
+.tx-model.is-open .tx-model-head {
   border-bottom: 1px solid var(--border);
+}
+
+.tx-model-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  padding: 9px 8px 9px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.tx-model-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.tx-model-toggle .tx-tool-label {
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tx-model-meta {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .tx-model-head .dot {
   margin-left: auto;
+}
+
+.tx-model-head .tx-copy {
+  flex: none;
+  margin-right: 7px;
+}
+
+.tx-model-body {
+  padding: 8px 12px 6px;
 }
 
 /* Agent activity rows nested under the plan checklist (or a standalone card) */
@@ -942,8 +992,39 @@
 
 .tx-activity-more {
   position: absolute;
-  top: 8px;
+  top: 9px;
   right: 10px;
+}
+
+.tx-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  padding: 1px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tx-section-toggle small {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-align: right;
+  text-transform: none;
 }
 
 .tx-artifacts {
@@ -1204,16 +1285,24 @@
 
 /* Subagent sub-blocks */
 .tx-subagents {
-  margin: 4px 0 10px;
+  margin: 7px 0 2px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+}
+
+.tx-subagents-panel {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2, var(--bg-2));
 }
 
 .tx-subagent {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2, var(--bg-2));
+  border-radius: 6px;
+  background: var(--surface-raised);
   overflow: hidden;
 }
 

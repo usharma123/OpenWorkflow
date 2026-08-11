@@ -86,7 +86,7 @@ export const NODE_CATALOG: NodeCatalogItem[] = [
       systemPrompt: "",
       prompt: "Use the workflow input to complete this task. Decide which tools help.\n\n{{input}}",
       maxToolRounds: 12,
-      timeoutSeconds: 300,
+      timeoutSeconds: 220,
       webSearch: false,
       maxSearchResults: 5,
     },

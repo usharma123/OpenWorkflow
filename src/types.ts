@@ -38,9 +38,11 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   nodeType: WorkflowNodeType;
   config: Record<string, unknown>;
   status?: "idle" | "running" | "waiting" | "success" | "error";
+  /** Ephemeral execution children, injected only into the rendered canvas. */
+  runtimeAgents?: RuntimeAgentSummary[];
 }
 
-export type WorkflowNode = Node<WorkflowNodeData, "workflow" | "sandbox">;
+export type WorkflowNode = Node<WorkflowNodeData, "workflow" | "sandbox" | "runtimeAgent">;
 export type WorkflowEdge = Edge;
 
 export interface WorkflowDefinition {
@@ -86,6 +88,21 @@ export interface RunToolTraceEntry {
   stepStatus?: string;
 }
 
+export interface RuntimeAgentSummary {
+  id: string;
+  name: string;
+  objective: string;
+  status: "queued" | "running" | "completed" | "failed";
+  attempt: number;
+  startedAt: number;
+  completedAt?: number;
+  partialOutput?: string;
+  toolTrace?: RunToolTraceEntry[];
+  content?: string;
+  citations?: Array<{ title: string; url: string }>;
+  error?: string;
+}
+
 export interface RunStepSummary {
   id: string;
   nodeId: string;
@@ -99,6 +116,7 @@ export interface RunStepSummary {
   output?: unknown;
   error?: string;
   plan?: RunStepPlan;
+  agents?: RuntimeAgentSummary[];
 }
 
 export interface PendingApproval {

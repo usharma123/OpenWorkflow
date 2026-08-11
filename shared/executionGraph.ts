@@ -71,6 +71,18 @@ export function topologicalNodes<NodeType extends ExecutableGraphNode>(
   nodes: NodeType[],
   edges: ExecutableGraphEdge[],
 ): NodeType[] {
+  return topologicalBatches(nodes, edges).flat();
+}
+
+/**
+ * Return dependency-safe execution waves. Nodes in the same wave have no
+ * dependency on one another and can therefore be dispatched concurrently.
+ * Input order is preserved inside each wave so workflow replay stays stable.
+ */
+export function topologicalBatches<NodeType extends ExecutableGraphNode>(
+  nodes: NodeType[],
+  edges: ExecutableGraphEdge[],
+): NodeType[][] {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const indegree = new Map(nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
@@ -81,23 +93,25 @@ export function topologicalNodes<NodeType extends ExecutableGraphNode>(
     outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
   }
 
-  const queue = nodes.filter((node) => indegree.get(node.id) === 0);
-  const ordered: NodeType[] = [];
-  while (queue.length) {
-    const node = queue.shift()!;
-    ordered.push(node);
-    for (const target of outgoing.get(node.id) ?? []) {
-      const count = (indegree.get(target) ?? 1) - 1;
-      indegree.set(target, count);
-      if (count === 0) {
-        const next = nodesById.get(target);
-        if (next) queue.push(next);
+  let wave = nodes.filter((node) => indegree.get(node.id) === 0);
+  const batches: NodeType[][] = [];
+  let visited = 0;
+  while (wave.length) {
+    batches.push(wave);
+    visited += wave.length;
+    const nextIds = new Set<string>();
+    for (const node of wave) {
+      for (const target of outgoing.get(node.id) ?? []) {
+        const count = (indegree.get(target) ?? 1) - 1;
+        indegree.set(target, count);
+        if (count === 0) nextIds.add(target);
       }
     }
+    wave = nodes.filter((node) => nextIds.has(node.id) && nodesById.has(node.id));
   }
 
-  if (ordered.length !== nodes.length) throw new Error("Workflow graphs cannot contain loops.");
-  return ordered;
+  if (visited !== nodes.length) throw new Error("Workflow graphs cannot contain loops.");
+  return batches;
 }
 
 function edgeCarriesPacket(edge: ExecutableGraphEdge, packet: ExecutionPacket) {

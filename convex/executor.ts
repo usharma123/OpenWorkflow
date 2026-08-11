@@ -15,7 +15,7 @@ import {
   packetForNodeOutput,
   nodeIdsForRunScope,
   terminalOutput,
-  topologicalNodes,
+  topologicalBatches,
   type ExecutionPacket,
 } from "../shared/executionGraph";
 import { stepRetryPolicy } from "../shared/reliability";
@@ -24,7 +24,11 @@ import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from 
 import { applyApprovalDecision } from "./policies";
 import { renderTemplate, valueAtPath } from "./template";
 
-export const workflow = new WorkflowManager(components.workflow);
+export const workflow = new WorkflowManager(components.workflow, {
+  // Eight-way research fan-outs are a first-class workflow shape. Keep a
+  // bounded ceiling so one run can fill a wave without monopolizing the pool.
+  workpoolOptions: { maxParallelism: 12 },
+});
 
 type NodeConfig = Record<string, unknown>;
 type WorkflowNode = {
@@ -54,6 +58,7 @@ const nonIdempotentWriteNodeTypes = new Set([
 ]);
 
 const daytonaNodeTypes = new Set(["code", "shell", "git"]);
+const MAX_PARALLEL_NODES_PER_WAVE = 4;
 
 function runRecordValue(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -277,11 +282,114 @@ export const updateStepPartialOutput = internalMutation({
   },
 });
 
+const agentTraceValidator = v.array(v.object({
+  tool: v.string(),
+  summary: v.string(),
+  ok: v.boolean(),
+}));
+
+/** Register a model-requested fan-out before the child work starts. Completed
+ * children are returned for reuse, making a parent retry checkpoint-aware. */
+export const registerAgentTasks = internalMutation({
+  args: {
+    stepRunId: v.id("stepRuns"),
+    tasks: v.array(v.object({ name: v.string(), objective: v.string() })),
+  },
+  handler: async (ctx, { stepRunId, tasks }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    if (!stepRun?.ownerKey) throw new Error("Workflow step ownership is invalid.");
+    const existing = await ctx.db.query("agentTasks").withIndex("by_step", (q) => q.eq("stepRunId", stepRunId)).collect();
+    const registrations = [];
+    for (const task of tasks) {
+      const taskKey = `${task.name.trim().toLowerCase()}\n${task.objective.trim()}`.slice(0, 2_100);
+      const previous = existing.find((candidate) => candidate.taskKey === taskKey);
+      if (previous?.status === "completed" && previous.content) {
+        registrations.push({
+          id: previous._id,
+          cached: true,
+          result: {
+            name: previous.name,
+            objective: previous.objective,
+            content: previous.content,
+            citations: previous.citations ?? [],
+            toolTrace: previous.toolTrace ?? [],
+            ok: true,
+          },
+        });
+        continue;
+      }
+      if (previous) {
+        await ctx.db.patch(previous._id, {
+          status: "queued",
+          attempt: previous.attempt + 1,
+          partialOutput: undefined,
+          toolTrace: [],
+          content: undefined,
+          citations: undefined,
+          error: undefined,
+          startedAt: Date.now(),
+          completedAt: undefined,
+        });
+        registrations.push({ id: previous._id, cached: false });
+        continue;
+      }
+      const id = await ctx.db.insert("agentTasks", {
+        ownerKey: stepRun.ownerKey,
+        runId: stepRun.runId,
+        stepRunId,
+        taskKey,
+        name: task.name,
+        objective: task.objective,
+        status: "queued",
+        attempt: 1,
+        startedAt: Date.now(),
+      });
+      registrations.push({ id, cached: false });
+    }
+    return registrations;
+  },
+});
+
+export const updateAgentTask = internalMutation({
+  args: {
+    agentTaskId: v.id("agentTasks"),
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    partialOutput: v.optional(v.string()),
+    toolTrace: v.optional(agentTraceValidator),
+    content: v.optional(v.string()),
+    citations: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.agentTaskId);
+    if (!task) return;
+    const terminal = args.status === "completed" || args.status === "failed";
+    await ctx.db.patch(args.agentTaskId, {
+      status: args.status,
+      ...(args.partialOutput !== undefined ? { partialOutput: args.partialOutput.slice(-40_000) } : {}),
+      ...(args.toolTrace ? { toolTrace: args.toolTrace.slice(-100) } : {}),
+      ...(args.content !== undefined ? { content: args.content.slice(0, 80_000) } : {}),
+      ...(args.citations ? { citations: args.citations.slice(0, 100) } : {}),
+      ...(args.error !== undefined ? { error: args.error.slice(0, 1_000) } : {}),
+      ...(terminal ? { completedAt: Date.now() } : {}),
+    });
+  },
+});
+
 export const failStep = internalMutation({
   args: { stepRunId: v.id("stepRuns"), error: v.string() },
   handler: async (ctx, { stepRunId, error }) => {
     const stepRun = await ctx.db.get(stepRunId);
     await ctx.db.patch(stepRunId, { status: "failed", error, completedAt: Date.now() });
+    const childTasks = await ctx.db.query("agentTasks").withIndex("by_step", (q) => q.eq("stepRunId", stepRunId)).collect();
+    await Promise.all(childTasks.flatMap((task) =>
+      task.status === "queued" || task.status === "running"
+        ? [ctx.db.patch(task._id, {
+            status: "failed",
+            error: "Parent agent step stopped before this subagent completed.",
+            completedAt: Date.now(),
+          })]
+        : []));
     if (stepRun && connectorProviders[stepRun.nodeType]) await ctx.db.insert("auditLogs", { ownerKey: stepRun.ownerKey, runId: stepRun.runId, stepRunId, event: "connector.use", provider: connectorProviders[stepRun.nodeType], connectionRef: stepRun.connectionRef, outcome: "failed", actor: "workflow-engine", detail: error.slice(0, 300), createdAt: Date.now() });
   },
 });
@@ -520,16 +628,20 @@ export const executeNode = internalAction({
 export const executeWorkflow = workflow
   .define({ args: { runId: v.id("workflowRuns") }, returns: v.any() })
   .handler(async (step, { runId }): Promise<unknown> => {
-    let activeStepRunId: import("./_generated/dataModel").Id<"stepRuns"> | undefined;
+    const activeStepRunIds = new Set<import("./_generated/dataModel").Id<"stepRuns">>();
     const sandboxIdsByBoundary = new Map<string, string>();
     try {
       const { run, definition } = await step.runQuery(internal.executor.loadRun, { runId });
       if (!run.ownerKey || !run.ownerUserId) throw new Error("Run ownership is invalid.");
+      const ownerKey = run.ownerKey;
+      const ownerUserId = run.ownerUserId;
       const allNodes = definition.nodes as WorkflowNode[];
       const nodes = allNodes.filter((node) => node.data.nodeType !== "daytonaSandbox");
       const edges = definition.edges as WorkflowEdge[];
       const activeNodeIds = nodeIdsForRunScope(nodes, edges, run.runMode ?? "full", run.scopeNodeId);
-      const ordered = topologicalNodes(nodes, edges).filter((node) => activeNodeIds.has(node.id));
+      const scopedNodes = nodes.filter((node) => activeNodeIds.has(node.id));
+      const scopedEdges = edges.filter((edge) => activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target));
+      const batches = topologicalBatches(scopedNodes, scopedEdges);
       const nodesById = new Map(nodes.map((node) => [node.id, node]));
       const outputs = new Map<string, ExecutionPacket>();
 
@@ -549,15 +661,21 @@ export const executeWorkflow = workflow
         }
       }
 
-      for (const node of ordered) {
+      for (const batch of batches) {
+        // A stable snapshot prevents sibling branches from observing one
+        // another's outputs merely because one happened to finish first.
+        const waveOutputs = new Map(outputs);
+        for (let offset = 0; offset < batch.length; offset += MAX_PARALLEL_NODES_PER_WAVE) {
+          const nodeBatch = batch.slice(offset, offset + MAX_PARALLEL_NODES_PER_WAVE);
+          const results = await Promise.allSettled(nodeBatch.map(async (node) => {
         const { label, nodeType, config } = node.data;
-        const incoming = inputPacketsForNode(node.id, edges, outputs);
+        const incoming = inputPacketsForNode(node.id, edges, waveOutputs);
         if (incoming.hasIncomingEdges && incoming.packets.length === 0) {
           if (run.runMode === "single") {
             throw new Error(`Pin output on an upstream step before testing ${label} by itself.`);
           }
           await step.runMutation(internal.executor.skipStep, { runId, node });
-          continue;
+          return;
         }
         const value = inputValueForPackets(incoming.packets, run.input);
 
@@ -572,7 +690,7 @@ export const executeWorkflow = workflow
           input: value,
           waiting: isApproval,
         });
-        activeStepRunId = stepRunId;
+        activeStepRunIds.add(stepRunId);
 
         try {
           if (nodeType === "delay") {
@@ -604,7 +722,7 @@ export const executeWorkflow = workflow
             // Plan-first agent: Luna proposes a plan, the run pauses for review,
             // then the approved (possibly edited) plan is executed.
             const stepOutputs = Object.fromEntries(
-              [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
+              [...waveOutputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
             );
             const model = String(config.model ?? "openai/gpt-5.6-luna");
             const systemPrompt = String(config.systemPrompt ?? "").trim() || defaultComputeSystemPrompt();
@@ -660,15 +778,16 @@ export const executeWorkflow = workflow
             outputs.set(node.id, packetForNodeOutput(node, output));
           } else {
             const stepOutputs = Object.fromEntries(
-              [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
+              [...waveOutputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
             );
             const isNonIdempotentLiveWrite = nonIdempotentWriteNodeTypes.has(nodeType);
+            const isLongRunningAgent = nodeType === "ai" && agentUsesCompute(config);
             const { retryAttempts, retryBackoffMs } = stepRetryPolicy(config);
             const output = await step.runAction(
               internal.executor.executeNode,
-              { node, input: value, stepOutputs, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
-              isNonIdempotentLiveWrite || retryAttempts === 0
-                ? undefined
+              { node, input: value, stepOutputs, ownerKey, ownerUserId, stepRunId },
+              isNonIdempotentLiveWrite || isLongRunningAgent || retryAttempts === 0
+                ? { retry: false }
                 : { retry: { maxAttempts: retryAttempts + 1, initialBackoffMs: retryBackoffMs, base: 2 } },
             );
             outputs.set(node.id, packetForNodeOutput(node, output));
@@ -678,23 +797,29 @@ export const executeWorkflow = workflow
           const packet = outputs.get(node.id);
           if (!packet) throw new Error(`${label} did not produce an output.`);
           await step.runMutation(internal.executor.finishStep, { stepRunId, output: packet.value });
-          activeStepRunId = undefined;
+          activeStepRunIds.delete(stepRunId);
         } catch (error) {
           const message = executionErrorMessage(error);
           const hasErrorBranch = edges.some((edge) => edge.source === node.id && edge.sourceHandle === "error");
-          if (!hasErrorBranch || config.errorOutput !== true) throw error;
+          if (!hasErrorBranch || config.errorOutput !== true) {
+            await step.runMutation(internal.executor.failStep, { stepRunId, error: message });
+            activeStepRunIds.delete(stepRunId);
+            throw error;
+          }
           await step.runMutation(internal.executor.failStep, { stepRunId, error: message });
           outputs.set(node.id, packetForNodeOutput(node, {
             error: message,
             failedNodeId: node.id,
             failedNodeLabel: label,
           }, "error"));
-          activeStepRunId = undefined;
+          activeStepRunIds.delete(stepRunId);
+        }
+          }));
+          const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+          if (failure) throw failure.reason;
         }
       }
 
-      const scopedNodes = nodes.filter((node) => activeNodeIds.has(node.id));
-      const scopedEdges = edges.filter((edge) => activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target));
       const output = terminalOutput(scopedNodes, scopedEdges, outputs);
       if (sandboxIdsByBoundary.size) {
         try {
@@ -709,8 +834,9 @@ export const executeWorkflow = workflow
       return output;
     } catch (error) {
       const message = executionErrorMessage(error);
-      if (activeStepRunId) {
-        await step.runMutation(internal.executor.failStep, { stepRunId: activeStepRunId, error: message });
+      if (activeStepRunIds.size) {
+        await Promise.all([...activeStepRunIds].map((stepRunId) =>
+          step.runMutation(internal.executor.failStep, { stepRunId, error: message })));
       }
       if (sandboxIdsByBoundary.size) {
         try {

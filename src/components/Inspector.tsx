@@ -293,10 +293,10 @@ function InspectorConfiguration({
                 />
                 <Num
                   label="Timeout (seconds)"
-                  value={Number(config.timeoutSeconds ?? 300)}
+                  value={Number(config.timeoutSeconds ?? 220)}
                   onChange={(v) => set("timeoutSeconds", v)}
                   min={30}
-                  max={900}
+                  max={220}
                 />
               </>
             )}
@@ -707,6 +707,7 @@ export function Inspector({
   const item = catalogByType[node.data.nodeType];
   const config = node.data.config;
   const type = node.data.nodeType;
+  const computeOn = config.useCompute === true || (config.useCompute !== false && Boolean(config.mode));
   const set = (key: string, value: unknown) => onPatchConfig({ [key]: value });
 
   return (
@@ -795,21 +796,29 @@ export function Inspector({
       {!type.endsWith("Trigger") && !["approval", "delay", "output", "daytonaSandbox", "googleDoc", "slack", "gmailSend", "calendarEvent", "sheetsAppend", "driveUpload"].includes(type) && (
         <section className="inspector-section">
           <span className="t-eyebrow">Reliability</span>
-          <Num
-            label="Retries after failure"
-            value={Number(config.retryAttempts ?? 2)}
-            onChange={(value) => set("retryAttempts", value)}
-            min={0}
-            max={5}
-          />
-          <Num
-            label="Initial retry delay (ms)"
-            value={Number(config.retryBackoffMs ?? 250)}
-            onChange={(value) => set("retryBackoffMs", value)}
-            min={100}
-            max={60000}
-          />
-          {["http", "ai"].includes(type) && (
+          {type === "ai" && computeOn ? (
+            <p className="t-small t-muted">
+              Long-running agents stop with a checkpoint before the action limit. Completed subagents are reused instead of restarting the whole step.
+            </p>
+          ) : (
+            <>
+              <Num
+                label="Retries after failure"
+                value={Number(config.retryAttempts ?? 2)}
+                onChange={(value) => set("retryAttempts", value)}
+                min={0}
+                max={5}
+              />
+              <Num
+                label="Initial retry delay (ms)"
+                value={Number(config.retryBackoffMs ?? 250)}
+                onChange={(value) => set("retryBackoffMs", value)}
+                min={100}
+                max={60000}
+              />
+            </>
+          )}
+          {["http", "ai"].includes(type) && !(type === "ai" && computeOn) && (
             <Num
               label="Timeout (seconds)"
               value={Number(config.timeoutSeconds ?? (type === "ai" ? 120 : 30))}

@@ -6,6 +6,7 @@ import {
   packetForNodeOutput,
   nodeIdsForRunScope,
   terminalOutput,
+  topologicalBatches,
   topologicalNodes,
   type ExecutionPacket,
 } from "../shared/executionGraph";
@@ -109,5 +110,23 @@ describe("port-aware workflow execution", () => {
       { source: "a", target: "b" },
       { source: "b", target: "a" },
     ])).toThrow("loops");
+  });
+
+  test("groups independent branches into dependency-safe parallel waves", () => {
+    const nodes = [node("root"), node("left"), node("right"), node("join"), node("tail")];
+    const edges = [
+      { source: "root", target: "left" },
+      { source: "root", target: "right" },
+      { source: "left", target: "join" },
+      { source: "right", target: "join" },
+      { source: "join", target: "tail" },
+    ];
+
+    expect(topologicalBatches(nodes, edges).map((wave) => wave.map((item) => item.id))).toEqual([
+      ["root"],
+      ["left", "right"],
+      ["join"],
+      ["tail"],
+    ]);
   });
 });

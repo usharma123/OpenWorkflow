@@ -38,35 +38,17 @@ import { materializeProposal } from "./lib/buildProposal";
 import { bindDefaultConnections, connectorProviderForNode } from "./lib/connectionBinding";
 import { mappingSourcesForNode } from "./lib/dataMapping";
 import { validateWorkflowConnection } from "./lib/workflowConnections";
+import { persistableNodes, workflowDraftFingerprint } from "./lib/workflowPersistence";
 import { nodeIdsForRunScope, type RunScopeMode } from "../shared/executionGraph";
 import type { Id } from "../convex/_generated/dataModel";
 import type {
   LatestRunResult,
   PendingApproval,
   PendingPlanReview,
+  RuntimeAgentSummary,
   WorkflowNode,
   WorkflowNodeType,
 } from "./types";
-
-function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
-  const persisted = nodes.map((node) => {
-    const { status: _status, ...data } = node.data;
-    const isBoundary = data.nodeType === "daytonaSandbox";
-    return {
-      id: node.id,
-      type: isBoundary ? "sandbox" as const : "workflow" as const,
-      position: node.position,
-      data,
-      ...(node.parentId ? { parentId: node.parentId, extent: "parent" as const } : {}),
-      ...(isBoundary ? {
-        initialWidth: node.measured?.width ?? node.width ?? node.initialWidth ?? 560,
-        initialHeight: node.measured?.height ?? node.height ?? node.initialHeight ?? 320,
-      } : {}),
-    };
-  });
-  return persisted.sort((left, right) =>
-    Number(right.data.nodeType === "daytonaSandbox") - Number(left.data.nodeType === "daytonaSandbox"));
-}
 
 const DAYTONA_CHILD_TYPES = new Set<WorkflowNodeType>(["code", "shell", "git"]);
 type EditorRunMode = Exclude<RunScopeMode, "resume">;
@@ -162,6 +144,19 @@ function useWorkflowEditorController() {
   const saveTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
   const skipInitialSave = useRef(true);
+  const persistedNodes = useMemo(() => persistableNodes(nodes), [nodes]);
+  const draftSnapshot = useMemo(
+    () => ({
+      name,
+      description,
+      enabled,
+      maxConcurrentRuns,
+      nodes: persistedNodes,
+      edges,
+    }),
+    [description, edges, enabled, maxConcurrentRuns, name, persistedNodes],
+  );
+  const draftFingerprint = useMemo(() => workflowDraftFingerprint(draftSnapshot), [draftSnapshot]);
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const mappingSources = useMemo(
@@ -228,14 +223,10 @@ function useWorkflowEditorController() {
     patchEditor({ saved: false });
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
+      const snapshot = JSON.parse(draftFingerprint) as typeof draftSnapshot;
       const definition = {
         ...initial,
-        name,
-        description,
-        enabled,
-        maxConcurrentRuns,
-        nodes: persistableNodes(nodes),
-        edges,
+        ...snapshot,
         updatedAt: Date.now(),
       };
       if (!convexClient) {
@@ -265,7 +256,7 @@ function useWorkflowEditorController() {
         );
     }, 500);
     return () => window.clearTimeout(saveTimer.current);
-  }, [backendLoaded, description, edges, enabled, initial, maxConcurrentRuns, name, nodes, patchEditor, refreshVersions, setNotice]);
+  }, [backendLoaded, draftFingerprint, initial, patchEditor, refreshVersions, setNotice]);
 
   const publishCurrentVersion = async () => {
     if (!convexClient || !saved || versionBusy) return;
@@ -593,17 +584,24 @@ function useWorkflowEditorController() {
         throw new Error(`${unready.data.label} needs an active connected account.`);
       }
 
-      const updatedAt = Date.now();
-      await client.mutation(upsertWorkflowRef, {
-        externalId: initial.id,
-        name,
-        description,
-        enabled,
-        maxConcurrentRuns,
-        nodes: persistableNodes(preparedNodes),
-        edges,
-        updatedAt,
-      });
+      // A run consumes the last saved builder definition. Persist only when
+      // the user actually edited the draft or connection binding changed;
+      // execution status and runtime-agent updates never create versions.
+      if (!saved || preparedNodes !== nodes) {
+        window.clearTimeout(saveTimer.current);
+        await client.mutation(upsertWorkflowRef, {
+          externalId: initial.id,
+          name,
+          description,
+          enabled,
+          maxConcurrentRuns,
+          nodes: persistableNodes(preparedNodes),
+          edges,
+          updatedAt: Date.now(),
+        });
+        patchEditor({ saved: true });
+        await refreshVersions();
+      }
       const runId = await client.mutation(startRunRef, {
         externalWorkflowId: initial.id,
         input: { requestedBy: "Editor user", date: new Date().toLocaleDateString() },
@@ -876,6 +874,21 @@ function WorkflowEditorView({
   buildChatGraph,
   applyBuildProposal,
 }: ReturnType<typeof useWorkflowEditorController>) {
+  const canvasNodes = useMemo(() => {
+    const latestAgentsByNode = new Map<string, RuntimeAgentSummary[]>();
+    for (const step of latestResult?.steps ?? []) {
+      if (step.agents?.length) latestAgentsByNode.set(step.nodeId, step.agents);
+    }
+    return nodes.map((node) => {
+      const runtimeAgents = latestAgentsByNode.get(node.id);
+      return runtimeAgents?.length
+        ? { ...node, data: { ...node.data, runtimeAgents } }
+        : node.data.runtimeAgents
+          ? { ...node, data: { ...node.data, runtimeAgents: undefined } }
+          : node;
+    });
+  }, [latestResult?.steps, nodes]);
+
   return (
     <div className="route">
       <header className="topbar">
@@ -955,7 +968,7 @@ function WorkflowEditorView({
         <NodePalette onAdd={addNode} />
 
         <WorkflowCanvas
-          nodes={nodes}
+          nodes={canvasNodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}

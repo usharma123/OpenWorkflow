@@ -8,6 +8,38 @@ import { requirePrincipal } from "./auth";
 import { workflowConcurrencyLimit } from "../shared/reliability";
 import { MAX_PLAN_STEPS } from "../shared/agentTools";
 
+function runtimeAgentSummary(task: Doc<"agentTasks">, detailed = true) {
+  const base = {
+    id: task._id,
+    name: task.name,
+    objective: task.objective,
+    status: task.status,
+    attempt: task.attempt,
+    startedAt: task.startedAt,
+    completedAt: task.completedAt,
+    error: task.error,
+  };
+  if (!detailed) return base;
+  return {
+    ...base,
+    partialOutput: task.status === "running" ? task.partialOutput?.slice(-1_600) : undefined,
+    toolTrace: task.toolTrace?.slice(-24),
+    content: task.content?.slice(0, 2_000),
+    citations: task.citations?.slice(0, 12),
+  };
+}
+
+function agentsByStep(agentTasks: Doc<"agentTasks">[], detailed: boolean) {
+  const grouped = new Map<string, Array<ReturnType<typeof runtimeAgentSummary>>>();
+  for (const task of agentTasks) {
+    const key = String(task.stepRunId);
+    const agents = grouped.get(key) ?? [];
+    agents.push(runtimeAgentSummary(task, detailed));
+    grouped.set(key, agents);
+  }
+  return grouped;
+}
+
 export async function ensureWorkflowVersion(ctx: MutationCtx, definition: Doc<"workflows">) {
   if (definition.currentVersionId) {
     const current = await ctx.db.get(definition.currentVersionId);
@@ -101,10 +133,20 @@ export const listForWorkflow = query({
       if (run.ownerKey === principal.ownerKey) owned.push(run);
       return owned;
     }, []);
-    return Promise.all(ownedRuns.map(async (run) => ({
-      ...run,
-      steps: await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
-    })));
+    return Promise.all(ownedRuns.map(async (run) => {
+      const [steps, agentTasks] = await Promise.all([
+        ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+        ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ]);
+      const runtimeAgents = agentsByStep(agentTasks, false);
+      return {
+        ...run,
+        steps: steps.map((step) => ({
+          ...step,
+          agents: runtimeAgents.get(String(step._id)) ?? [],
+        })),
+      };
+    }));
   },
 });
 
@@ -114,8 +156,21 @@ export const get = query({
     const principal = await requirePrincipal(ctx);
     const run = await ctx.db.get(runId);
     if (!run || run.ownerKey !== principal.ownerKey) return null;
-    const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
-    return { ...run, steps: steps.filter((step) => step.ownerKey === principal.ownerKey) };
+    const [steps, agentTasks] = await Promise.all([
+      ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", runId)).collect(),
+      ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", runId)).collect(),
+    ]);
+    const ownedAgentTasks = agentTasks.filter((task) => task.ownerKey === principal.ownerKey);
+    const runtimeAgents = agentsByStep(ownedAgentTasks, true);
+    return {
+      ...run,
+      steps: steps
+        .filter((step) => step.ownerKey === principal.ownerKey)
+        .map((step) => ({
+          ...step,
+          agents: runtimeAgents.get(String(step._id)) ?? [],
+        })),
+    };
   },
 });
 

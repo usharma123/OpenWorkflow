@@ -8,9 +8,11 @@ import {
   defaultMaxToolRounds,
   extractToolCalls,
   inferArtifactType,
+  isAgentTimeoutError,
   looksLikeLeakedToolCall,
   looksLikeToolRefusal,
   MAX_FETCH_CHARS,
+  MAX_BATCH_SEARCH_QUERIES,
   MAX_PLAN_STEPS,
   MAX_SUBAGENT_TASKS,
   openAiToolsForCompute,
@@ -59,6 +61,19 @@ describe("agent tool argument validation", () => {
     expect(() => assertPublicHttpsUrl("http://example.com")).toThrow("HTTPS");
     expect(() => assertPublicHttpsUrl("https://127.0.0.1/secret")).toThrow("Private");
     expect(() => validateToolCall("not_a_tool", {})).toThrow("not available");
+  });
+
+  test("validates and clamps batched searches", () => {
+    const queries = Array.from({ length: 10 }, (_, index) => ` query ${index} `);
+    expect(validateToolCall("batch_web_search", { queries, numResults: 50 })).toEqual({
+      name: "batch_web_search",
+      args: {
+        queries: queries.slice(0, MAX_BATCH_SEARCH_QUERIES).map((query) => query.trim()),
+        numResults: 10,
+      },
+    });
+    expect(() => validateToolCall("batch_web_search", { queries: [] })).toThrow("at least one query");
+    expect(toolTraceSummary("batch_web_search", { queries: ["a", "b"] }, true)).toContain("2 queries");
   });
 
   test("validates sandbox tools and rejects unsafe shell", () => {
@@ -115,6 +130,14 @@ describe("agent tool argument validation", () => {
     expect(looksLikeLeakedToolCall("The report ran code and searched the web for you.")).toBe(false);
     expect(looksLikeLeakedToolCall("Revenue grew 12% year over year.")).toBe(false);
     expect(looksLikeLeakedToolCall("")).toBe(false);
+  });
+
+  test("recognizes timeout-like failures across Error and DOM-style shapes", () => {
+    expect(isAgentTimeoutError(new Error("OpenRouter model round timed out after 60 seconds."))).toBe(true);
+    expect(isAgentTimeoutError({ name: "TimeoutError", message: "The operation was aborted" })).toBe(true);
+    expect(isAgentTimeoutError({ name: "AbortError" })).toBe(true);
+    expect(isAgentTimeoutError("Uncaught TimeoutError: operation was aborted due to timeout")).toBe(true);
+    expect(isAgentTimeoutError(new Error("OpenRouter rejected the API key."))).toBe(false);
   });
 });
 

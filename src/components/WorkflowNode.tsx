@@ -47,6 +47,11 @@ export function WorkflowNodeComponent({ data, selected, parentId }: NodeProps<Wo
         <span className="wf-node-description">{data.description}</span>
         <div className="wf-node-foot">
           {agentBadge && <span className="wf-node-runtime">{agentBadge}</span>}
+          {data.runtimeAgents && data.runtimeAgents.length > 0 && (
+            <span className="wf-node-runtime">
+              {data.runtimeAgents.length} spawned
+            </span>
+          )}
           {item.runtime === "daytona" && parentId && <span className="wf-node-runtime">Secure compute</span>}
           {status !== "idle" && (
             <span className={`wf-node-status ${status}`}>

@@ -1,5 +1,6 @@
 export type AgentToolName =
   | "web_search"
+  | "batch_web_search"
   | "fetch_url"
   | "run_code"
   | "read_file"
@@ -50,6 +51,7 @@ export interface AgentToolTraceEntry {
 /** Full tool belt when Use compute is on — the model decides what to call. */
 export const COMPUTE_TOOLS: readonly AgentToolName[] = [
   "web_search",
+  "batch_web_search",
   "fetch_url",
   "run_code",
   "read_file",
@@ -60,7 +62,7 @@ export const COMPUTE_TOOLS: readonly AgentToolName[] = [
 ] as const;
 
 /** Restricted belt for spawned subagents: research only, no sandbox, no recursion. */
-export const SUBAGENT_TOOLS: readonly AgentToolName[] = ["web_search", "fetch_url"] as const;
+export const SUBAGENT_TOOLS: readonly AgentToolName[] = ["web_search", "batch_web_search", "fetch_url"] as const;
 
 const ALL_TOOL_NAMES: readonly AgentToolName[] = [
   ...COMPUTE_TOOLS,
@@ -69,6 +71,7 @@ const ALL_TOOL_NAMES: readonly AgentToolName[] = [
 ] as const;
 
 export const MAX_SUBAGENT_TASKS = 3;
+export const MAX_BATCH_SEARCH_QUERIES = 6;
 export const MAX_PLAN_STEPS = 8;
 export const MAX_FETCH_CHARS = 20_000;
 
@@ -111,6 +114,7 @@ export function defaultComputeSystemPrompt(): string {
   return [
     "You are a capable workflow agent with web research and a secure sandbox.",
     "Decide for yourself when to search, fetch pages, run code, write files, or publish artifacts.",
+    "Batch independent searches together with batch_web_search instead of issuing them serially.",
     "Workflow input is available at /tmp/openworkflow-input.json (and workspace/input.json).",
     "Call tools only through the provided function-calling interface — never invent that a tool is unavailable.",
     "When producing deliverables, prefer workspace/report.md, workspace/summary.json, workspace/table.csv, and workspace/dashboard.html,",
@@ -276,6 +280,27 @@ export function openAiToolsForCompute(options?: {
             numResults: { type: "integer", minimum: 1, maximum: 10 },
           },
           required: ["query"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "batch_web_search",
+        description:
+          "Search several independent web queries concurrently in one tool call. Prefer this over repeated web_search calls when you already know multiple queries.",
+        parameters: {
+          type: "object",
+          properties: {
+            queries: {
+              type: "array",
+              minItems: 1,
+              maxItems: MAX_BATCH_SEARCH_QUERIES,
+              items: { type: "string" },
+            },
+            numResults: { type: "integer", minimum: 1, maximum: 10 },
+          },
+          required: ["queries"],
         },
       },
     },
@@ -475,6 +500,23 @@ export function validateToolCall(
         },
       };
     }
+    case "batch_web_search": {
+      const rawQueries = Array.isArray(args.queries) ? args.queries : [];
+      const queries = rawQueries
+        .flatMap((query) => {
+          const normalized = String(query ?? "").trim().slice(0, 500);
+          return normalized ? [normalized] : [];
+        })
+        .slice(0, MAX_BATCH_SEARCH_QUERIES);
+      if (!queries.length) throw new Error("batch_web_search requires at least one query.");
+      return {
+        name: "batch_web_search",
+        args: {
+          queries,
+          numResults: Math.min(10, Math.max(1, Math.trunc(Number(args.numResults ?? 5)))),
+        },
+      };
+    }
     case "fetch_url": {
       const url = assertPublicHttpsUrl(args.url);
       return {
@@ -624,6 +666,28 @@ export function looksLikeLeakedToolCall(content: string): boolean {
   return false;
 }
 
+/** Timeout-like failures are not consistently surfaced as Error instances.
+ * Node fetch may reject with a DOMException, while upstream gateways often
+ * wrap the same condition in a plain object or message string. */
+export function isAgentTimeoutError(error: unknown): boolean {
+  const candidate =
+    error && typeof error === "object"
+      ? (error as { name?: unknown; message?: unknown })
+      : undefined;
+  const name = typeof candidate?.name === "string" ? candidate.name : "";
+  const message =
+    typeof candidate?.message === "string"
+      ? candidate.message
+      : typeof error === "string"
+        ? error
+        : "";
+  return (
+    name === "TimeoutError" ||
+    name === "AbortError" ||
+    /timed? out|timeout|operation was aborted/i.test(message)
+  );
+}
+
 export function toolTraceSummary(
   name: AgentToolName,
   args: Record<string, unknown>,
@@ -636,6 +700,11 @@ export function toolTraceSummary(
       const query = String(args.query ?? "").slice(0, 80);
       const detail = query ? `“${query}”` : "";
       return ok ? `Searched ${detail || "the web"}` : `Search failed${detail ? ` — ${detail}` : ""}`;
+    }
+    case "batch_web_search": {
+      const queries = Array.isArray(args.queries) ? args.queries : [];
+      if (!ok) return `Batch search failed${queries.length ? ` — ${queries.length} queries` : ""}`;
+      return `Searched ${queries.length} quer${queries.length === 1 ? "y" : "ies"} in parallel`;
     }
     case "fetch_url": {
       const url = String(args.url ?? "").slice(0, 100);

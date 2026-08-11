@@ -79,6 +79,7 @@ export function RunsRoute() {
             output: step.output,
             error: step.error,
             plan: step.plan,
+            agents: step.agents,
           }));
           const result: LatestRunResult = {
             id: run._id,
