@@ -13,6 +13,8 @@ import type * as connectionActions from "../connectionActions.js";
 import type * as connections from "../connections.js";
 import type * as connectorExecution from "../connectorExecution.js";
 import type * as crons from "../crons.js";
+import type * as daytonaExecution from "../daytonaExecution.js";
+import type * as daytonaPolicy from "../daytonaPolicy.js";
 import type * as executor from "../executor.js";
 import type * as http from "../http.js";
 import type * as openrouterStream from "../openrouterStream.js";
@@ -36,6 +38,8 @@ declare const fullApi: ApiFromModules<{
   connections: typeof connections;
   connectorExecution: typeof connectorExecution;
   crons: typeof crons;
+  daytonaExecution: typeof daytonaExecution;
+  daytonaPolicy: typeof daytonaPolicy;
   executor: typeof executor;
   http: typeof http;
   openrouterStream: typeof openrouterStream;

@@ -66,4 +66,39 @@ describe("saved workflow graph validation", () => {
       { source: "c", target: "a" },
     ])).toThrow("loops");
   });
+
+  test("requires sandbox operations to live inside a Daytona boundary", () => {
+    const position = { x: 0, y: 0 };
+    const config = {};
+    const code = {
+      id: "code",
+      type: "workflow",
+      position,
+      data: { nodeType: "code", label: "Code", description: "", config },
+    };
+    expect(() => validateWorkflowGraph([code], [])).toThrow("inside a Daytona");
+    expect(() => validateWorkflowGraph([
+      {
+        id: "sandbox",
+        type: "sandbox",
+        position,
+        data: { nodeType: "daytonaSandbox", label: "Sandbox", description: "", config: { networkMode: "blocked" } },
+      },
+      { ...code, parentId: "sandbox" },
+    ], [])).not.toThrow();
+  });
+
+  test("rejects unsafe Daytona domain allowlists", () => {
+    expect(() => validateWorkflowGraph([{
+      id: "sandbox",
+      type: "sandbox",
+      position: { x: 0, y: 0 },
+      data: {
+        nodeType: "daytonaSandbox",
+        label: "Sandbox",
+        description: "",
+        config: { networkMode: "allowlist", allowedDomains: "https://example.com/path" },
+      },
+    }], [])).toThrow("hostnames");
+  });
 });

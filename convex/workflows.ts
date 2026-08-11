@@ -13,6 +13,25 @@ const workflowArgs = {
   updatedAt: v.number(),
 };
 
+function definitionChanged(
+  current: { name: string; description: string; enabled: boolean; nodes: unknown[]; edges: unknown[] },
+  next: { name: string; description: string; enabled: boolean; nodes: unknown[]; edges: unknown[] },
+) {
+  return JSON.stringify({
+    name: current.name,
+    description: current.description,
+    enabled: current.enabled,
+    nodes: current.nodes,
+    edges: current.edges,
+  }) !== JSON.stringify({
+    name: next.name,
+    description: next.description,
+    enabled: next.enabled,
+    nodes: next.nodes,
+    edges: next.edges,
+  });
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -94,10 +113,48 @@ export const upsert = mutation({
     const hasWebhook = Boolean(webhookSlug);
     const webhookSecret = hasWebhook ? existing?.webhookSecret ?? crypto.randomUUID().replaceAll("-", "") : undefined;
     if (existing) {
-      await ctx.db.patch(existing._id, { ...args, ...ownership, webhookSlug, webhookSecret });
+      const changed = definitionChanged(existing, args);
+      const version = existing.currentVersionId && !changed
+        ? existing.version ?? 1
+        : (existing.version ?? 0) + 1;
+      await ctx.db.patch(existing._id, { ...args, ...ownership, webhookSlug, webhookSecret, version });
+      if (!existing.currentVersionId || changed) {
+        const currentVersionId = await ctx.db.insert("workflowVersions", {
+          ownerKey: principal.ownerKey,
+          workflowId: existing._id,
+          version,
+          name: args.name,
+          description: args.description,
+          enabled: args.enabled,
+          nodes: args.nodes,
+          edges: args.edges,
+          createdAt: Date.now(),
+        });
+        await ctx.db.patch(existing._id, { currentVersionId });
+      }
       return existing._id;
     }
-    return ctx.db.insert("workflows", { ...args, ...ownership, webhookSlug, webhookSecret, createdAt: Date.now() });
+    const workflowId = await ctx.db.insert("workflows", {
+      ...args,
+      ...ownership,
+      webhookSlug,
+      webhookSecret,
+      version: 1,
+      createdAt: Date.now(),
+    });
+    const currentVersionId = await ctx.db.insert("workflowVersions", {
+      ownerKey: principal.ownerKey,
+      workflowId,
+      version: 1,
+      name: args.name,
+      description: args.description,
+      enabled: args.enabled,
+      nodes: args.nodes,
+      edges: args.edges,
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(workflowId, { currentVersionId });
+    return workflowId;
   },
 });
 
@@ -110,7 +167,21 @@ export const rename = mutation({
     const trimmed = name.trim();
     if (!trimmed) throw new Error("Workflow names cannot be empty.");
     if (trimmed.length > 120) throw new Error("Workflow names must be 120 characters or fewer.");
-    await ctx.db.patch(workflowId, { name: trimmed, updatedAt: Date.now() });
+    if (trimmed === workflow.name) return;
+    const now = Date.now();
+    const version = (workflow.version ?? 0) + 1;
+    const currentVersionId = await ctx.db.insert("workflowVersions", {
+      ownerKey: principal.ownerKey,
+      workflowId,
+      version,
+      name: trimmed,
+      description: workflow.description,
+      enabled: workflow.enabled,
+      nodes: workflow.nodes,
+      edges: workflow.edges,
+      createdAt: now,
+    });
+    await ctx.db.patch(workflowId, { name: trimmed, version, currentVersionId, updatedAt: now });
   },
 });
 
@@ -131,7 +202,7 @@ export const duplicate = mutation({
     if (!trimmed) throw new Error("Workflow names cannot be empty.");
     if (trimmed.length > 120) throw new Error("Workflow names must be 120 characters or fewer.");
     const now = Date.now();
-    return ctx.db.insert("workflows", {
+    const duplicatedWorkflowId = await ctx.db.insert("workflows", {
       ownerKey: principal.ownerKey,
       ownerUserId: source.ownerUserId ?? principal.userId,
       organizationId: principal.organizationId,
@@ -143,9 +214,23 @@ export const duplicate = mutation({
       edges: source.edges,
       webhookSlug: source.webhookSlug,
       webhookSecret: source.webhookSlug ? crypto.randomUUID().replaceAll("-", "") : undefined,
+      version: 1,
       createdAt: now,
       updatedAt: now,
     });
+    const currentVersionId = await ctx.db.insert("workflowVersions", {
+      ownerKey: principal.ownerKey,
+      workflowId: duplicatedWorkflowId,
+      version: 1,
+      name: trimmed,
+      description: source.description,
+      enabled: false,
+      nodes: source.nodes,
+      edges: source.edges,
+      createdAt: now,
+    });
+    await ctx.db.patch(duplicatedWorkflowId, { currentVersionId });
+    return duplicatedWorkflowId;
   },
 });
 
@@ -155,7 +240,13 @@ export const remove = mutation({
     const principal = await requirePrincipal(ctx);
     const workflow = await ctx.db.get(workflowId);
     if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
-    const runs = await ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect();
+    const [runs, versions] = await Promise.all([
+      ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
+      ctx.db
+        .query("workflowVersions")
+        .withIndex("by_workflow_version", (q) => q.eq("workflowId", workflowId))
+        .collect(),
+    ]);
     await Promise.all(runs.map(async (run) => {
       const [steps, auditLogs] = await Promise.all([
         ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
@@ -167,6 +258,7 @@ export const remove = mutation({
       ]);
       await ctx.db.delete(run._id);
     }));
+    await Promise.all(versions.map((version) => ctx.db.delete(version._id)));
     await ctx.db.delete(workflowId);
   },
 });

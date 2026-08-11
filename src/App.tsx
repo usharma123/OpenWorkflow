@@ -8,7 +8,7 @@ import {
   type Edge,
 } from "@xyflow/react";
 import { Check, Loader2, Play, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, type SetStateAction } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { catalogByType, STARTER_WORKFLOW } from "./catalog";
 import { Inspector } from "./components/Inspector";
@@ -27,23 +27,64 @@ import {
   upsertWorkflowRef,
 } from "./lib/convexClient";
 import { runDemo } from "./lib/demoRunner";
+import { mappingSourcesForNode } from "./lib/dataMapping";
 import { validateWorkflowConnection } from "./lib/workflowConnections";
 import type {
   LatestRunResult,
   PendingApproval,
-  RunLog,
   WorkflowNode,
   WorkflowNodeType,
 } from "./types";
 
 function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
-  return nodes.map((node) => {
+  const persisted = nodes.map((node) => {
     const { status: _status, ...data } = node.data;
-    return { id: node.id, type: "workflow" as const, position: node.position, data };
+    const isBoundary = data.nodeType === "daytonaSandbox";
+    return {
+      id: node.id,
+      type: isBoundary ? "sandbox" as const : "workflow" as const,
+      position: node.position,
+      data,
+      ...(node.parentId ? { parentId: node.parentId, extent: "parent" as const } : {}),
+      ...(isBoundary ? {
+        initialWidth: node.measured?.width ?? node.width ?? node.initialWidth ?? 560,
+        initialHeight: node.measured?.height ?? node.height ?? node.initialHeight ?? 320,
+      } : {}),
+    };
   });
+  return persisted.sort((left, right) =>
+    Number(right.data.nodeType === "daytonaSandbox") - Number(left.data.nodeType === "daytonaSandbox"));
 }
 
-export default function App() {
+const DAYTONA_CHILD_TYPES = new Set<WorkflowNodeType>(["code", "shell", "git"]);
+
+interface EditorState {
+  name: string;
+  description: string;
+  enabled: boolean;
+  selectedNodeId?: string;
+  saved: boolean;
+  running: boolean;
+  latestResult?: LatestRunResult;
+  pendingApproval?: PendingApproval;
+  approvalBusy: boolean;
+  backendLoaded: boolean;
+  panelMode: PanelMode;
+}
+
+type EditorAction =
+  | { type: "patch"; patch: Partial<EditorState> }
+  | { type: "setLatestResult"; value: SetStateAction<LatestRunResult | undefined> };
+
+function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  if (action.type === "setLatestResult") {
+    const latestResult = typeof action.value === "function" ? action.value(state.latestResult) : action.value;
+    return { ...state, latestResult };
+  }
+  return { ...state, ...action.patch };
+}
+
+function useWorkflowEditorController() {
   const navigate = useNavigate();
   const { workflowId } = useParams<{ workflowId: string }>();
   const { connections, setNotice, refresh: refreshConnections } = useConnections();
@@ -54,18 +95,34 @@ export default function App() {
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
-  const [name, setName] = useState(initial.name);
-  const [description, setDescription] = useState(initial.description);
-  const [enabled, setEnabled] = useState(initial.enabled);
-  const [selectedNodeId, setSelectedNodeId] = useState<string>();
-  const [saved, setSaved] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [, setLogs] = useState<RunLog[]>([]);
-  const [latestResult, setLatestResult] = useState<LatestRunResult>();
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval>();
-  const [approvalBusy, setApprovalBusy] = useState(false);
-  const [backendLoaded, setBackendLoaded] = useState(false);
-  const [panelMode, setPanelMode] = useState<PanelMode>("run");
+  const [editor, dispatch] = useReducer(editorReducer, {
+    name: initial.name,
+    description: initial.description,
+    enabled: initial.enabled,
+    saved: true,
+    running: false,
+    approvalBusy: false,
+    backendLoaded: false,
+    panelMode: "run",
+  });
+  const {
+    name,
+    description,
+    enabled,
+    selectedNodeId,
+    saved,
+    running,
+    latestResult,
+    pendingApproval,
+    approvalBusy,
+    backendLoaded,
+    panelMode,
+  } = editor;
+  const patchEditor = useCallback((patch: Partial<EditorState>) => dispatch({ type: "patch", patch }), []);
+  const setLatestResult = useCallback(
+    (value: SetStateAction<LatestRunResult | undefined>) => dispatch({ type: "setLatestResult", value }),
+    [],
+  );
 
   const reactFlow = useReactFlow<WorkflowNode>();
   const saveTimer = useRef<number | undefined>(undefined);
@@ -76,6 +133,10 @@ export default function App() {
   );
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
+  const mappingSources = useMemo(
+    () => selectedNodeId ? mappingSourcesForNode(selectedNodeId, edges, latestResult?.steps) : [],
+    [edges, latestResult?.steps, selectedNodeId],
+  );
 
   useEffect(() => {
     if (!convexClient || hydratedOnce.current) return;
@@ -88,12 +149,14 @@ export default function App() {
           navigate("/workflows", { replace: true });
           return;
         }
-        setName(remote.name);
-        setDescription(remote.description);
-        setEnabled(remote.enabled);
-        setNodes(remote.nodes);
+        patchEditor({
+          name: remote.name,
+          description: remote.description,
+          enabled: remote.enabled,
+          backendLoaded: true,
+        });
+        setNodes(persistableNodes(remote.nodes as WorkflowNode[]));
         setEdges(remote.edges);
-        setBackendLoaded(true);
       })
       .catch((error) =>
         setNotice({
@@ -101,7 +164,7 @@ export default function App() {
           tone: "error",
         }),
       )
-  }, [initial.id, navigate, setEdges, setNodes, setNotice]);
+  }, [initial.id, navigate, patchEditor, setEdges, setNodes, setNotice]);
 
   useEffect(() => {
     if (!backendLoaded) return;
@@ -109,7 +172,7 @@ export default function App() {
       skipInitialSave.current = false;
       return;
     }
-    setSaved(false);
+    patchEditor({ saved: false });
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
       const definition = {
@@ -122,7 +185,7 @@ export default function App() {
         updatedAt: Date.now(),
       };
       if (!convexClient) {
-        setSaved(true);
+        patchEditor({ saved: true });
         return;
       }
       void convexClient
@@ -135,7 +198,7 @@ export default function App() {
           edges: definition.edges,
           updatedAt: definition.updatedAt,
         })
-        .then(() => setSaved(true))
+        .then(() => patchEditor({ saved: true }))
         .catch((error) =>
           setNotice({
             message: error instanceof Error ? `Save failed: ${error.message}` : "Save failed",
@@ -144,7 +207,7 @@ export default function App() {
         );
     }, 500);
     return () => window.clearTimeout(saveTimer.current);
-  }, [backendLoaded, description, edges, enabled, initial, name, nodes, setNotice]);
+  }, [backendLoaded, description, edges, enabled, initial, name, nodes, patchEditor, setNotice]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -153,7 +216,7 @@ export default function App() {
         setNotice({ message: problem, tone: "error" });
         return;
       }
-      setEdges((current) => addEdge({ ...connection, animated: true }, current));
+      setEdges((current) => addEdge(connection, current));
     },
     [edges, setEdges, setNotice],
   );
@@ -173,12 +236,76 @@ export default function App() {
   const addNode = useCallback(
     (type: WorkflowNodeType, position?: { x: number; y: number }) => {
       const item = catalogByType[type];
+      const fallbackPosition = reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+      const desiredPosition = position ?? fallbackPosition;
+      if (type === "daytonaSandbox") {
+        const boundary: WorkflowNode = {
+          id: `daytonaSandbox-${crypto.randomUUID().slice(0, 8)}`,
+          type: "sandbox",
+          position: desiredPosition,
+          initialWidth: 560,
+          initialHeight: 320,
+          data: {
+            label: item.label,
+            description: item.description,
+            nodeType: type,
+            config: structuredClone(item.defaultConfig),
+          },
+        };
+        setNodes((current) => [...current, boundary]);
+        patchEditor({ selectedNodeId: boundary.id, panelMode: "step" });
+        return;
+      }
+
+      if (DAYTONA_CHILD_TYPES.has(type)) {
+        const boundaries = nodes.filter((node) => node.data.nodeType === "daytonaSandbox" && !node.parentId);
+        const containingBoundary = boundaries.find((boundary) => {
+          const width = boundary.measured?.width ?? boundary.width ?? boundary.initialWidth ?? 560;
+          const height = boundary.measured?.height ?? boundary.height ?? boundary.initialHeight ?? 320;
+          return desiredPosition.x >= boundary.position.x && desiredPosition.x <= boundary.position.x + width &&
+            desiredPosition.y >= boundary.position.y && desiredPosition.y <= boundary.position.y + height;
+        });
+        const boundary = containingBoundary ?? (!position ? boundaries[0] : undefined);
+        const boundaryId = boundary?.id ?? `daytonaSandbox-${crypto.randomUUID().slice(0, 8)}`;
+        const newBoundary: WorkflowNode | undefined = boundary ? undefined : {
+          id: boundaryId,
+          type: "sandbox",
+          position: { x: desiredPosition.x - 70, y: desiredPosition.y - 90 },
+          initialWidth: 560,
+          initialHeight: 320,
+          data: {
+            label: catalogByType.daytonaSandbox.label,
+            description: catalogByType.daytonaSandbox.description,
+            nodeType: "daytonaSandbox",
+            config: structuredClone(catalogByType.daytonaSandbox.defaultConfig),
+          },
+        };
+        const parentPosition = boundary?.position ?? newBoundary!.position;
+        const siblingCount = nodes.filter((node) => node.parentId === boundaryId).length;
+        const childPosition = containingBoundary || newBoundary
+          ? { x: desiredPosition.x - parentPosition.x, y: desiredPosition.y - parentPosition.y }
+          : { x: 50 + (siblingCount % 2) * 245, y: 90 + Math.floor(siblingCount / 2) * 105 };
+        const child: WorkflowNode = {
+          id: `${type}-${crypto.randomUUID().slice(0, 8)}`,
+          type: "workflow",
+          parentId: boundaryId,
+          extent: "parent",
+          position: childPosition,
+          data: {
+            label: item.label,
+            description: item.description,
+            nodeType: type,
+            config: structuredClone(item.defaultConfig),
+          },
+        };
+        setNodes((current) => [...current, ...(newBoundary ? [newBoundary] : []), child]);
+        patchEditor({ selectedNodeId: child.id, panelMode: "step" });
+        return;
+      }
       const node: WorkflowNode = {
         id: `${type}-${crypto.randomUUID().slice(0, 8)}`,
         type: "workflow",
-        position:
-          position ??
-          reactFlow.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 }),
+        position: desiredPosition,
         data: {
           label: item.label,
           description: item.description,
@@ -187,10 +314,9 @@ export default function App() {
         },
       };
       setNodes((current) => [...current, node]);
-      setSelectedNodeId(node.id);
-      setPanelMode("step");
+      patchEditor({ selectedNodeId: node.id, panelMode: "step" });
     },
-    [reactFlow, setNodes],
+    [nodes, patchEditor, reactFlow, setNodes],
   );
 
   const onDrop = useCallback(
@@ -204,26 +330,30 @@ export default function App() {
   );
 
   const selectNode = useCallback((id: string) => {
-    setSelectedNodeId(id);
-    setPanelMode("step");
-  }, []);
+    patchEditor({ selectedNodeId: id, panelMode: "step" });
+  }, [patchEditor]);
 
   const clearSelection = useCallback(() => {
-    setSelectedNodeId(undefined);
-    setPanelMode("run");
-  }, []);
+    patchEditor({ selectedNodeId: undefined, panelMode: "run" });
+  }, [patchEditor]);
 
   const updateSelectedNode = (updated: WorkflowNode) =>
     setNodes((current) => current.map((node) => (node.id === updated.id ? updated : node)));
 
   const deleteSelectedNode = () => {
     if (!selectedNodeId) return;
-    setNodes((current) => current.filter((node) => node.id !== selectedNodeId));
-    setEdges((current) =>
-      current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId),
+    const removedIds = nodes.reduce(
+      (ids, node) => {
+        if (node.parentId === selectedNodeId) ids.add(node.id);
+        return ids;
+      },
+      new Set([selectedNodeId]),
     );
-    setSelectedNodeId(undefined);
-    setPanelMode("run");
+    setNodes((current) => current.filter((node) => !removedIds.has(node.id)));
+    setEdges((current) =>
+      current.filter((edge) => !removedIds.has(edge.source) && !removedIds.has(edge.target)),
+    );
+    patchEditor({ selectedNodeId: undefined, panelMode: "run" });
   };
 
   const duplicateSelectedNode = () => {
@@ -235,17 +365,18 @@ export default function App() {
       selected: false,
     };
     setNodes((current) => [...current, duplicate]);
-    setSelectedNodeId(duplicate.id);
+    patchEditor({ selectedNodeId: duplicate.id });
   };
 
   const runWorkflow = async () => {
     if (running) return;
-    setRunning(true);
-    setLogs([]);
-    setPanelMode("run");
-    setSelectedNodeId(undefined);
-    setLatestResult({ status: "queued" });
-    setPendingApproval(undefined);
+    patchEditor({
+      running: true,
+      panelMode: "run",
+      selectedNodeId: undefined,
+      latestResult: { status: "queued" },
+      pendingApproval: undefined,
+    });
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
 
     try {
@@ -312,14 +443,14 @@ export default function App() {
               const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
               if (waiting) {
                 const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
-                setPendingApproval({
+                patchEditor({ pendingApproval: {
                   backendRunId: runId,
                   nodeId: waiting.nodeId,
                   title: waiting.nodeLabel,
                   prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
                   input: waiting.input,
-                });
-              } else setPendingApproval(undefined);
+                } });
+              } else patchEditor({ pendingApproval: undefined });
 
               setNodes((current) =>
                 current.map((node) => {
@@ -354,7 +485,7 @@ export default function App() {
       } else {
         const demoRun = await runDemo(
           { ...initial, name, description, enabled, nodes, edges, updatedAt: Date.now() },
-          (log) => setLogs((current) => [...current, log]),
+          () => undefined,
           (nodeId, status) =>
             setNodes((current) =>
               current.map((node) =>
@@ -364,7 +495,7 @@ export default function App() {
           (request) =>
             new Promise((resolve) => {
               demoApprovalResolver.current = resolve;
-              setPendingApproval(request);
+              patchEditor({ pendingApproval: request });
             }),
         );
         setLatestResult({
@@ -382,15 +513,14 @@ export default function App() {
         error: error instanceof Error ? error.message : "Workflow failed.",
       }));
     } finally {
-      setRunning(false);
-      setPendingApproval(undefined);
+      patchEditor({ running: false, pendingApproval: undefined });
       demoApprovalResolver.current = undefined;
     }
   };
 
   const decideApproval = async (approved: boolean, note?: string) => {
     if (!pendingApproval || approvalBusy) return;
-    setApprovalBusy(true);
+    patchEditor({ approvalBusy: true });
     try {
       if (convexClient && pendingApproval.backendRunId) {
         await convexClient.mutation(approveRunRef, {
@@ -403,7 +533,7 @@ export default function App() {
         demoApprovalResolver.current({ approved, ...(note?.trim() ? { note: note.trim() } : {}) });
         demoApprovalResolver.current = undefined;
       }
-      setPendingApproval(undefined);
+      patchEditor({ pendingApproval: undefined });
       setNotice({
         message: approved ? "Approved — the workflow is continuing" : "Rejected — the run stops here",
         tone: "info",
@@ -414,21 +544,91 @@ export default function App() {
         tone: "error",
       });
     } finally {
-      setApprovalBusy(false);
+      patchEditor({ approvalBusy: false });
     }
   };
 
   const restoreStarter = () => {
     const starter = structuredClone(STARTER_WORKFLOW);
-    setName(starter.name);
-    setDescription(starter.description);
-    setEnabled(starter.enabled);
+    patchEditor({
+      name: starter.name,
+      description: starter.description,
+      enabled: starter.enabled,
+      selectedNodeId: undefined,
+    });
     setNodes(starter.nodes);
     setEdges(starter.edges);
-    setSelectedNodeId(undefined);
     setNotice({ message: "Starter workflow restored", tone: "info" });
   };
 
+  return {
+    name,
+    enabled,
+    saved,
+    running,
+    nodes,
+    edges,
+    onNodesChange,
+    onEdgesChange,
+    onConnect,
+    onReconnect,
+    selectNode,
+    clearSelection,
+    onDrop,
+    panelMode,
+    selectedNode,
+    connections,
+    mappingSources,
+    latestResult,
+    pendingApproval,
+    approvalBusy,
+    addNode,
+    restoreStarter,
+    runWorkflow,
+    updateSelectedNode,
+    deleteSelectedNode,
+    duplicateSelectedNode,
+    decideApproval,
+    openConnectors: () => navigate("/connections"),
+    setName: (name: string) => patchEditor({ name }),
+    setEnabled: (enabled: boolean) => patchEditor({ enabled }),
+    setPanelMode: (panelMode: PanelMode) => patchEditor({ panelMode }),
+  };
+}
+
+function WorkflowEditorView({
+  name,
+  enabled,
+  saved,
+  running,
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onConnect,
+  onReconnect,
+  selectNode,
+  clearSelection,
+  onDrop,
+  panelMode,
+  selectedNode,
+  connections,
+  mappingSources,
+  latestResult,
+  pendingApproval,
+  approvalBusy,
+  addNode,
+  restoreStarter,
+  runWorkflow,
+  updateSelectedNode,
+  deleteSelectedNode,
+  duplicateSelectedNode,
+  decideApproval,
+  openConnectors,
+  setName,
+  setEnabled,
+  setPanelMode,
+}: ReturnType<typeof useWorkflowEditorController>) {
   return (
     <div className="route">
       <header className="topbar">
@@ -494,15 +694,13 @@ export default function App() {
                 onDelete={deleteSelectedNode}
                 onDuplicate={duplicateSelectedNode}
                 connections={connections}
-                onOpenConnectors={() => navigate("/connections")}
+                onOpenConnectors={openConnectors}
+                mappingSources={mappingSources}
               />
             ) : (
               <div className="tx-empty">
                 <p className="t-heading">No step selected</p>
-                <p className="t-small t-muted">
-                  Choose a card on the canvas to rename it, change what it does, or pick the account
-                  it uses.
-                </p>
+                <p className="t-small t-muted">Pick a step on the canvas to edit it.</p>
               </div>
             )
           }
@@ -520,4 +718,8 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+export default function App() {
+  return <WorkflowEditorView {...useWorkflowEditorController()} />;
 }

@@ -139,17 +139,36 @@ The key stays in Convex. Browser safe demo mode does not call OpenRouter; Convex
 OpenRouter responses are consumed as SSE streams. The current model text is patched to the active
 step at most once every 200ms so the run transcript updates live without creating a write per token.
 
-## 6. Deploy with Vercel
+## 6. Configure isolated Daytona execution
+
+Code, Shell, and Git steps run only when they are placed inside a Daytona sandbox boundary. All
+steps in one boundary share one ephemeral sandbox and filesystem for that run. Sandboxes default to
+blocked outbound networking, have a bounded TTL, and are deleted after success or failure.
+
+```bash
+bunx convex env set DAYTONA_API_KEY '<api key>'
+bunx convex env set DAYTONA_TARGET us
+```
+
+`DAYTONA_API_URL` is optional and defaults to Daytona Cloud. A boundary can use a prebuilt snapshot
+and an explicit domain allowlist. OpenWorkflow does not copy Google or Slack OAuth tokens into
+sandbox code. Git clone currently accepts public HTTPS URLs only.
+
+Workflow runs are pinned to an immutable workflow version. Connections carry independent output
+packets, so sibling branches receive their common parent's output and multi-input joins receive an
+`items` array plus source provenance instead of whichever branch happened to run last.
+
+## 7. Deploy with Vercel
 
 Vercel serves the frontend; Convex owns durable execution and secrets.
 
 1. Add `VITE_CLERK_PUBLISHABLE_KEY` to the Vercel project. Configure two environment-scoped values named `CONVEX_DEPLOY_KEY`: a production deploy key scoped only to **Production**, and a Convex project preview deploy key scoped only to **Preview**. Convex rejects production deploy keys in preview builds by design. In Convex Project Settings, add `CLERK_JWT_ISSUER_DOMAIN` as a **Preview** default environment variable so newly created preview deployments can compile `convex/auth.config.ts`.
 2. Use the checked-in Bun install and build settings. `vercel.json` deploys Convex and injects `VITE_CONVEX_URL` for the Vite build.
 3. Set `APP_URL` on the production Convex deployment to the canonical HTTPS Vercel domain.
-4. Use production Clerk, Google, Slack, and OpenRouter values in the production Convex deployment.
+4. Use production Clerk, Google, Slack, OpenRouter, and optional Daytona values in the production Convex deployment.
 5. Add the production `/sso-callback` URL to Clerk's allowed redirect URLs and the production Convex callback to Slack.
 
-Do not put Clerk secret keys, Google tokens, Slack tokens, Slack client secrets, the encryption key, or OpenRouter keys in Vercel variables prefixed with `VITE_`.
+Do not put Clerk secret keys, Google tokens, Slack tokens, Slack client secrets, the encryption key, OpenRouter keys, or Daytona keys in Vercel variables prefixed with `VITE_`.
 
 ## Validation
 

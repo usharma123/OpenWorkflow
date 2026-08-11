@@ -1,7 +1,9 @@
 import { Copy, Trash2 } from "lucide-react";
 import { catalogByType } from "../catalog";
 import type { ConnectionMetadata } from "../lib/convexClient";
+import type { MappingSource } from "../lib/dataMapping";
 import type { WorkflowNode } from "../types";
+import { DataMapper } from "./DataMapper";
 import { NodeMark } from "./icons";
 
 interface InspectorProps {
@@ -11,6 +13,7 @@ interface InspectorProps {
   onDuplicate: () => void;
   connections: ConnectionMetadata[];
   onOpenConnectors: () => void;
+  mappingSources: MappingSource[];
 }
 
 function Text({
@@ -114,15 +117,12 @@ function ConnectionField({
   );
 }
 
-export function Inspector({
+function InspectorConfiguration({
   node,
   onChange,
-  onDelete,
-  onDuplicate,
   connections,
   onOpenConnectors,
-}: InspectorProps) {
-  const item = catalogByType[node.data.nodeType];
+}: Pick<InspectorProps, "node" | "onChange" | "connections" | "onOpenConnectors">) {
   const config = node.data.config;
   const type = node.data.nodeType;
   const set = (key: string, value: unknown) =>
@@ -130,33 +130,8 @@ export function Inspector({
   const str = (key: string, fallback = "") => String(config[key] ?? fallback);
 
   return (
-    <div className="inspector">
-      <div className="inspector-identity">
-        <span className="inspector-mark">
-          <NodeMark type={type} size={18} />
-        </span>
-        <span>
-          <strong className="t-heading">{item.label}</strong>
-          <span className="t-small t-muted">{item.outcome}</span>
-        </span>
-      </div>
-
-      <section className="inspector-section">
-        <span className="t-eyebrow">Step</span>
-        <Text
-          label="Name"
-          value={node.data.label}
-          onChange={(label) => onChange({ ...node, data: { ...node.data, label } })}
-        />
-        <Text
-          label="Description"
-          value={node.data.description}
-          onChange={(description) => onChange({ ...node, data: { ...node.data, description } })}
-        />
-      </section>
-
-      <section className="inspector-section">
-        <span className="t-eyebrow">Configuration</span>
+    <section className="inspector-section">
+      <span className="t-eyebrow">Configuration</span>
 
         {type === "gmailTrigger" && (
           <>
@@ -290,6 +265,107 @@ export function Inspector({
           </>
         )}
 
+        {type === "daytonaSandbox" && (
+          <>
+            <label className="field">
+              <span>Runtime language</span>
+              <select value={str("language", "typescript")} onChange={(e) => set("language", e.target.value)}>
+                <option value="typescript">TypeScript</option>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+              </select>
+            </label>
+            <Text
+              label="Snapshot (optional)"
+              value={str("snapshot")}
+              onChange={(v) => set("snapshot", v)}
+              placeholder="Prebuilt Daytona snapshot name"
+            />
+            <label className="field">
+              <span>Outbound network</span>
+              <select value={str("networkMode", "blocked")} onChange={(e) => set("networkMode", e.target.value)}>
+                <option value="blocked">Block all</option>
+                <option value="allowlist">Allow listed domains</option>
+              </select>
+            </label>
+            {str("networkMode", "blocked") === "allowlist" && (
+              <Text
+                label="Allowed domains"
+                value={str("allowedDomains")}
+                onChange={(v) => set("allowedDomains", v)}
+                placeholder="github.com,*.githubusercontent.com"
+                hint="Comma-separated hostnames only. Credentials are not copied into the sandbox."
+              />
+            )}
+            <Num
+              label="Maximum lifetime (minutes)"
+              value={Number(config.ttlMinutes ?? 30)}
+              onChange={(v) => set("ttlMinutes", v)}
+              min={5}
+              max={240}
+            />
+          </>
+        )}
+
+        {type === "code" && (
+          <>
+            <Text
+              label="Code"
+              multiline
+              value={str("code")}
+              onChange={(v) => set("code", v)}
+              hint="Read JSON input from OPENWORKFLOW_INPUT. Print JSON to return a structured value."
+            />
+            <Num
+              label="Timeout (seconds)"
+              value={Number(config.timeoutSeconds ?? 60)}
+              onChange={(v) => set("timeoutSeconds", v)}
+              min={1}
+              max={900}
+            />
+          </>
+        )}
+
+        {type === "shell" && (
+          <>
+            <Text label="Command" multiline value={str("command")} onChange={(v) => set("command", v)} />
+            <Text
+              label="Working directory"
+              value={str("workingDirectory", "workspace")}
+              onChange={(v) => set("workingDirectory", v)}
+              hint="Relative path inside the shared sandbox filesystem."
+            />
+            <Num
+              label="Timeout (seconds)"
+              value={Number(config.timeoutSeconds ?? 60)}
+              onChange={(v) => set("timeoutSeconds", v)}
+              min={1}
+              max={900}
+            />
+          </>
+        )}
+
+        {type === "git" && (
+          <>
+            <Text
+              label="Repository URL"
+              value={str("repositoryUrl")}
+              onChange={(v) => set("repositoryUrl", v)}
+              placeholder="https://github.com/org/repository.git"
+              hint="Public HTTPS repositories only in this first version. Add the host to the boundary allowlist."
+            />
+            <Text label="Directory" value={str("directory", "workspace/repository")} onChange={(v) => set("directory", v)} />
+            <Text label="Branch (optional)" value={str("branch")} onChange={(v) => set("branch", v)} />
+            <Num
+              label="Clone depth"
+              value={Number(config.depth ?? 1)}
+              onChange={(v) => set("depth", v)}
+              min={1}
+              max={1000}
+            />
+          </>
+        )}
+
         {type === "condition" && (
           <>
             <Text label="Value to check" value={str("path")} onChange={(v) => set("path", v)} />
@@ -338,7 +414,64 @@ export function Inspector({
         {type === "manualTrigger" && (
           <p className="t-small t-muted">Nothing to configure. Run the workflow when you are ready.</p>
         )}
+    </section>
+  );
+}
+
+export function Inspector({
+  node,
+  onChange,
+  onDelete,
+  onDuplicate,
+  connections,
+  onOpenConnectors,
+  mappingSources,
+}: InspectorProps) {
+  const item = catalogByType[node.data.nodeType];
+  const config = node.data.config;
+  const type = node.data.nodeType;
+  const set = (key: string, value: unknown) =>
+    onChange({ ...node, data: { ...node.data, config: { ...config, [key]: value } } });
+
+  return (
+    <div className="inspector">
+      <div className="inspector-identity">
+        <span className="inspector-mark">
+          <NodeMark type={type} size={18} />
+        </span>
+        <span>
+          <strong className="t-heading">{item.label}</strong>
+          <span className="t-small t-muted">{item.outcome}</span>
+        </span>
+      </div>
+
+      <section className="inspector-section">
+        <span className="t-eyebrow">Step</span>
+        <Text
+          label="Name"
+          value={node.data.label}
+          onChange={(label) => onChange({ ...node, data: { ...node.data, label } })}
+        />
+        <Text
+          label="Description"
+          value={node.data.description}
+          onChange={(description) => onChange({ ...node, data: { ...node.data, description } })}
+        />
       </section>
+
+      <InspectorConfiguration
+        node={node}
+        onChange={onChange}
+        connections={connections}
+        onOpenConnectors={onOpenConnectors}
+      />
+
+      <DataMapper
+        key={`${node.id}:${node.data.nodeType}`}
+        node={node}
+        sources={mappingSources}
+        onChange={onChange}
+      />
 
       {/*
         Live is the default and reads as unremarkable. Demo is a quiet opt-out

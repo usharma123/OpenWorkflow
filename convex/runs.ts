@@ -2,7 +2,54 @@ import { sendEvent, start } from "@convex-dev/workflow";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { requirePrincipal } from "./auth";
+
+export async function ensureWorkflowVersion(ctx: MutationCtx, definition: Doc<"workflows">) {
+  if (definition.currentVersionId) {
+    const current = await ctx.db.get(definition.currentVersionId);
+    if (current && current.workflowId === definition._id) return current;
+  }
+  const version = definition.version ?? 1;
+  const workflowVersionId = await ctx.db.insert("workflowVersions", {
+    ownerKey: definition.ownerKey!,
+    workflowId: definition._id,
+    version,
+    name: definition.name,
+    description: definition.description,
+    enabled: definition.enabled,
+    nodes: definition.nodes,
+    edges: definition.edges,
+    createdAt: Date.now(),
+  });
+  await ctx.db.patch(definition._id, { currentVersionId: workflowVersionId, version });
+  return (await ctx.db.get(workflowVersionId))!;
+}
+
+export async function createPinnedRun(
+  ctx: MutationCtx,
+  definition: Doc<"workflows">,
+  trigger: string,
+  input: unknown,
+) {
+  if (!definition.ownerKey || !definition.ownerUserId) throw new Error("Workflow ownership is invalid.");
+  const version = await ensureWorkflowVersion(ctx, definition);
+  const runId = await ctx.db.insert("workflowRuns", {
+    workflowId: definition._id,
+    workflowVersionId: version._id,
+    workflowVersion: version.version,
+    ownerKey: definition.ownerKey,
+    ownerUserId: definition.ownerUserId,
+    status: "queued",
+    trigger,
+    input,
+    startedAt: Date.now(),
+  });
+  const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId });
+  await ctx.db.patch(runId, { workflowEngineId });
+  return runId;
+}
 
 export const listForWorkflow = query({
   args: { workflowId: v.id("workflows") },
@@ -42,18 +89,12 @@ export const startRun = mutation({
       .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", args.externalWorkflowId))
       .unique();
     if (!definition) throw new Error("Save the workflow before running it.");
-    const runId = await ctx.db.insert("workflowRuns", {
-      workflowId: definition._id,
-      ownerKey: principal.ownerKey,
-      ownerUserId: principal.userId,
-      status: "queued",
-      trigger: args.trigger ?? "manual",
-      input: args.input,
-      startedAt: Date.now(),
-    });
-    const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId });
-    await ctx.db.patch(runId, { workflowEngineId });
-    return runId;
+    return createPinnedRun(
+      ctx,
+      { ...definition, ownerUserId: principal.userId },
+      args.trigger ?? "manual",
+      args.input,
+    );
   },
 });
 
@@ -61,19 +102,8 @@ export const startForWebhook = internalMutation({
   args: { workflowId: v.id("workflows"), input: v.any() },
   handler: async (ctx, { workflowId, input }) => {
     const definition = await ctx.db.get(workflowId);
-    if (!definition?.ownerKey || !definition.ownerUserId) throw new Error("Workflow ownership is invalid.");
-    const runId = await ctx.db.insert("workflowRuns", {
-      workflowId,
-      ownerKey: definition.ownerKey,
-      ownerUserId: definition.ownerUserId,
-      status: "queued",
-      trigger: "webhook",
-      input,
-      startedAt: Date.now(),
-    });
-    const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId });
-    await ctx.db.patch(runId, { workflowEngineId });
-    return runId;
+    if (!definition) throw new Error("Workflow not found.");
+    return createPinnedRun(ctx, definition, "webhook", input);
   },
 });
 

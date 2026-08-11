@@ -13,9 +13,13 @@ export type WorkflowNodeType =
   | "transform"
   | "delay"
   | "approval"
+  | "daytonaSandbox"
+  | "code"
+  | "shell"
+  | "git"
   | "output";
 
-export type NodeCategory = "Start" | "Think" | "Review" | "Deliver" | "Advanced";
+export type NodeCategory = "Start" | "Think" | "Compute" | "Review" | "Deliver" | "Advanced";
 
 export interface WorkflowNodeData extends Record<string, unknown> {
   label: string;
@@ -25,7 +29,7 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   status?: "idle" | "running" | "waiting" | "success" | "error";
 }
 
-export type WorkflowNode = Node<WorkflowNodeData, "workflow">;
+export type WorkflowNode = Node<WorkflowNodeData, "workflow" | "sandbox">;
 export type WorkflowEdge = Edge;
 
 export interface WorkflowDefinition {
@@ -96,4 +100,5 @@ export interface NodeCatalogItem {
   defaultConfig: Record<string, unknown>;
   outcome: string;
   setup?: "none" | "connection";
+  runtime?: "daytona";
 }

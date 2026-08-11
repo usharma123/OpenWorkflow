@@ -1,6 +1,5 @@
-import { start } from "@convex-dev/workflow";
-import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
+import { createPinnedRun, ensureWorkflowVersion } from "./runs";
 
 type ScheduleNode = {
   id: string;
@@ -66,46 +65,42 @@ export const dispatch = internalMutation({
       .query("workflows")
       .withIndex("by_enabled", (q) => q.eq("enabled", true))
       .collect();
-    let dispatched = 0;
-
-    for (const definition of definitions) {
-      if (!definition.ownerKey || !definition.ownerUserId) continue;
+    const dispatchCounts = await Promise.all(definitions.map(async (definition) => {
+      if (!definition.ownerKey || !definition.ownerUserId) return 0;
       const nodes = definition.nodes as ScheduleNode[];
       const schedules = nodes.filter((node) => node?.data?.nodeType === "scheduleTrigger");
       const lastFired = (definition.lastScheduleMinuteByNode ?? {}) as Record<string, string>;
       const nextLastFired = { ...lastFired };
-
-      for (const node of schedules) {
-        if (lastFired[node.id] === minuteKey) continue;
+      const dueSchedules = schedules.filter((node) => {
+        if (lastFired[node.id] === minuteKey) return false;
         const cron = node.data.config.cron ?? "";
         const timezone = node.data.config.timezone ?? "UTC";
-        let matches = false;
         try {
-          matches = cronMatches(cron, now, timezone);
+          return cronMatches(cron, now, timezone);
         } catch {
           // Invalid timezones and malformed expressions are ignored until fixed in the editor.
+          return false;
         }
-        if (!matches) continue;
+      });
+      if (dueSchedules.length === 0) return 0;
 
-        const runId = await ctx.db.insert("workflowRuns", {
-          workflowId: definition._id,
-          ownerKey: definition.ownerKey,
-          ownerUserId: definition.ownerUserId,
-          status: "queued",
-          trigger: "schedule",
-          input: { scheduledAt: now, timezone },
-          startedAt: now,
-        });
-        const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId });
-        await ctx.db.patch(runId, { workflowEngineId });
+      // Pin once before concurrent run creation so legacy definitions cannot
+      // race and create duplicate workflow-version records.
+      const version = await ensureWorkflowVersion(ctx, definition);
+      const pinnedDefinition = { ...definition, currentVersionId: version._id };
+      await Promise.all(dueSchedules.map((node) => {
+        const timezone = node.data.config.timezone ?? "UTC";
         nextLastFired[node.id] = minuteKey;
-        dispatched += 1;
-      }
+        return createPinnedRun(ctx, pinnedDefinition, "schedule", {
+          scheduledAt: now,
+          timezone,
+          triggerNodeId: node.id,
+        });
+      }));
 
-      if (JSON.stringify(nextLastFired) !== JSON.stringify(lastFired)) {
-        await ctx.db.patch(definition._id, { lastScheduleMinuteByNode: nextLastFired });
-      }
-    }
-    return dispatched;
+      await ctx.db.patch(definition._id, { lastScheduleMinuteByNode: nextLastFired });
+      return dueSchedules.length;
+    }));
+    return dispatchCounts.reduce((total, count) => total + count, 0);
   },
 });

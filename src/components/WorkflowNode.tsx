@@ -10,7 +10,7 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Failed",
 };
 
-export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode>) {
+export function WorkflowNodeComponent({ data, selected, parentId }: NodeProps<WorkflowNode>) {
   const item = catalogByType[data.nodeType];
   const isTrigger = data.nodeType.endsWith("Trigger");
   const isOutput = data.nodeType === "output";
@@ -19,7 +19,10 @@ export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode
   const isDemo = item.setup === "connection" && data.config.executionMode !== "live";
 
   return (
-    <div className={`wf-node ${selected ? "is-selected" : ""} status-${status}`}>
+    <div
+      className={`wf-node ${selected ? "is-selected" : ""} ${isCondition ? "is-condition" : ""} status-${status}`}
+      data-cat={item.category}
+    >
       {!isTrigger && (
         <Handle
           type="target"
@@ -29,17 +32,15 @@ export function WorkflowNodeComponent({ data, selected }: NodeProps<WorkflowNode
         />
       )}
 
-      <div className="wf-node-head">
-        <span className="wf-node-mark">
-          <NodeMark type={data.nodeType} size={13} />
-        </span>
-        <strong>{data.label}</strong>
-      </div>
+      <span className="wf-node-mark">
+        <NodeMark type={data.nodeType} size={17} />
+      </span>
 
       <div className="wf-node-body">
+        <strong>{data.label}</strong>
         <span className="wf-node-description">{data.description}</span>
         <div className="wf-node-foot">
-          <span className="wf-node-kind">{item.category}</span>
+          {item.runtime === "daytona" && parentId && <span className="wf-node-runtime">Daytona</span>}
           {isDemo && <span className="wf-node-demo">Demo</span>}
           {status !== "idle" && (
             <span className={`wf-node-status ${status}`}>

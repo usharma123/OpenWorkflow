@@ -1,0 +1,135 @@
+export type ExecutableGraphNode = {
+  id: string;
+  data: { nodeType: string };
+};
+
+export type ExecutableGraphEdge = {
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+};
+
+export type ExecutionPacket = {
+  id: string;
+  nodeId: string;
+  port: string;
+  value: unknown;
+};
+
+export type MergedExecutionInput = {
+  items: unknown[];
+  sources: Array<{ packetId: string; nodeId: string; port: string }>;
+};
+
+export function topologicalNodes<NodeType extends ExecutableGraphNode>(
+  nodes: NodeType[],
+  edges: ExecutableGraphEdge[],
+): NodeType[] {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map<string, string[]>();
+
+  for (const edge of edges) {
+    if (!nodesById.has(edge.source) || !nodesById.has(edge.target)) continue;
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+  }
+
+  const queue = nodes.filter((node) => indegree.get(node.id) === 0);
+  const ordered: NodeType[] = [];
+  while (queue.length) {
+    const node = queue.shift()!;
+    ordered.push(node);
+    for (const target of outgoing.get(node.id) ?? []) {
+      const count = (indegree.get(target) ?? 1) - 1;
+      indegree.set(target, count);
+      if (count === 0) {
+        const next = nodesById.get(target);
+        if (next) queue.push(next);
+      }
+    }
+  }
+
+  if (ordered.length !== nodes.length) throw new Error("Workflow graphs cannot contain loops.");
+  return ordered;
+}
+
+function edgeCarriesPacket(edge: ExecutableGraphEdge, packet: ExecutionPacket) {
+  return !edge.sourceHandle || edge.sourceHandle === packet.port;
+}
+
+export function inputPacketsForNode(
+  nodeId: string,
+  edges: ExecutableGraphEdge[],
+  outputs: ReadonlyMap<string, ExecutionPacket>,
+): { hasIncomingEdges: boolean; packets: ExecutionPacket[] } {
+  const incoming = edges.filter((edge) => edge.target === nodeId);
+  const packets = incoming.flatMap((edge) => {
+    const packet = outputs.get(edge.source);
+    return packet && edgeCarriesPacket(edge, packet) ? [packet] : [];
+  });
+  return { hasIncomingEdges: incoming.length > 0, packets };
+}
+
+export function inputValueForPackets(packets: ExecutionPacket[], rootValue: unknown): unknown {
+  if (packets.length === 0) return rootValue;
+  if (packets.length === 1) return packets[0].value;
+  return {
+    items: packets.map((packet) => packet.value),
+    sources: packets.map((packet) => ({
+      packetId: packet.id,
+      nodeId: packet.nodeId,
+      port: packet.port,
+    })),
+  } satisfies MergedExecutionInput;
+}
+
+export function packetForNodeOutput(
+  node: ExecutableGraphNode,
+  value: unknown,
+): ExecutionPacket {
+  const port = node.data.nodeType === "condition"
+    ? String(Boolean((value as { passed?: boolean } | null)?.passed))
+    : "default";
+  return {
+    id: `${node.id}:${port}:0`,
+    nodeId: node.id,
+    port,
+    value,
+  };
+}
+
+export function terminalOutput(
+  nodes: ExecutableGraphNode[],
+  edges: ExecutableGraphEdge[],
+  outputs: ReadonlyMap<string, ExecutionPacket>,
+): unknown {
+  const explicitOutputs = nodes.reduce<ExecutionPacket[]>((packets, node) => {
+    if (node.data.nodeType === "output") {
+      const packet = outputs.get(node.id);
+      if (packet) packets.push(packet);
+    }
+    return packets;
+  }, []);
+  const terminalPackets = explicitOutputs.length
+    ? explicitOutputs
+    : nodes.flatMap((node) => {
+        const packet = outputs.get(node.id);
+        if (!packet) return [];
+        const hasExecutedDownstream = edges.some(
+          (edge) => edge.source === node.id && edgeCarriesPacket(edge, packet) && outputs.has(edge.target),
+        );
+        return hasExecutedDownstream ? [] : [packet];
+      });
+
+  if (terminalPackets.length === 0) return undefined;
+  if (terminalPackets.length === 1) return terminalPackets[0].value;
+  return {
+    outputs: terminalPackets.map((packet) => ({
+      nodeId: packet.nodeId,
+      port: packet.port,
+      value: packet.value,
+    })),
+  };
+}

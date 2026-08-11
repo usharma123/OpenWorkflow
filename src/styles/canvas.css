@@ -7,20 +7,55 @@
   background: var(--bg);
 }
 
+/*
+ * React Flow's own theming API. Setting these means the library's defaults are
+ * never the thing that paints, regardless of stylesheet order.
+ */
+.react-flow {
+  --xy-background-color: var(--bg);
+  --xy-edge-stroke: var(--ink-7);
+  --xy-edge-stroke-selected: var(--ink-9);
+  --xy-edge-stroke-width: 1.5;
+  --xy-connectionline-stroke: var(--ink-8);
+  --xy-controls-button-background-color: var(--surface-raised);
+  --xy-controls-button-background-color-hover: var(--surface-hover);
+  --xy-controls-button-color: var(--text-secondary);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: var(--shadow);
+  --xy-minimap-background-color: var(--surface);
+  --xy-minimap-mask-background-color: rgb(10 10 11 / 0.72);
+  --xy-minimap-node-background-color: var(--ink-5);
+  --xy-attribution-background-color: transparent;
+  --xy-selection-background-color: rgb(157 157 168 / 0.06);
+  --xy-selection-border: 1px dashed var(--ink-6);
+}
+
 .react-flow__pane {
   cursor: default;
 }
 
 .react-flow__edge-path {
-  stroke: var(--ink-8);
-  stroke-width: 1.4;
-  stroke-dasharray: 4 5;
+  stroke: var(--ink-7);
+  stroke-width: 1.5;
   stroke-linecap: round;
 }
 
 .react-flow__edge.selected .react-flow__edge-path,
 .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--ink-9);
+  stroke-width: 2;
+}
+
+/* Only a live run animates an edge. */
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5 5;
+}
+
+.react-flow__connectionline .react-flow__connection-path {
   stroke: var(--ink-8);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
 }
 
 /* Generous invisible hit area around the small, solid diagram port. */
@@ -59,6 +94,7 @@
 }
 
 .react-flow__controls {
+  margin: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -66,6 +102,8 @@
 }
 
 .react-flow__controls-button {
+  width: 28px;
+  height: 28px;
   border-color: var(--border);
   background: var(--surface-raised);
   fill: var(--text-secondary);
@@ -76,58 +114,88 @@
   fill: var(--text);
 }
 
+/*
+ * React Flow ships a white minimap. Size it down and drive every layer from
+ * the ink ramp, or it burns a bright rectangle into the corner of the canvas.
+ */
+/* Extra bottom margin keeps the map clear of the attribution link. */
 .react-flow__minimap {
+  width: 168px;
+  height: 112px;
+  margin: 14px 14px 24px;
   border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.react-flow__minimap-svg {
   border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
+.react-flow__minimap-mask {
+  fill: rgb(10 10 11 / 0.72);
+  stroke: var(--ink-5);
+  stroke-width: 1;
+}
+
 .react-flow__attribution {
   background: transparent;
-  color: var(--ink-5);
+  padding: 0 4px;
+}
+
+.react-flow__attribution a {
+  color: var(--ink-4);
+  font-size: 9px;
 }
 
 /* ---- Node card ----------------------------------------------------------- */
 
+/*
+ * One flat tile per step: an accent-tinted glyph, the name, and the current
+ * state. No gradients, no lift on hover, no glow — a canvas of forty of these
+ * has to stay readable.
+ */
 .wf-node {
   position: relative;
-  width: 206px;
-  border: 1px solid var(--ink-6);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  width: 216px;
+  min-height: 56px;
+  border: 1px solid var(--ink-5);
   border-radius: var(--radius);
-  background: linear-gradient(180deg, var(--ink-3), var(--ink-2));
-  box-shadow: 0 7px 22px -12px rgb(0 0 0 / 0.9), inset 0 1px rgb(255 255 255 / 0.025);
-  transition: border-color var(--normal) var(--ease), background var(--normal) var(--ease),
-    box-shadow var(--normal) var(--ease), transform var(--normal) var(--ease);
+  background: var(--ink-2);
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+/* The accent reads as a hairline rail down the icon side. */
+.wf-node::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  opacity: 0.85;
 }
 
 .wf-node:hover {
   z-index: 2;
-  border-color: var(--ink-8);
-  background: linear-gradient(180deg, var(--ink-4), var(--ink-3));
-  box-shadow: 0 14px 34px -14px rgb(0 0 0 / 0.95), 0 0 0 1px var(--ink-6),
-    0 0 24px rgb(157 157 168 / 0.12), inset 0 1px rgb(255 255 255 / 0.06);
-  transform: translateY(-2px) scale(1.015);
+  border-color: var(--ink-6);
+  background: var(--ink-3);
 }
 
 .wf-node.is-selected {
-  border-color: var(--ink-9);
-  box-shadow: 0 10px 28px -14px rgb(0 0 0 / 0.95), 0 0 0 1px var(--ink-8),
-    0 0 28px rgb(157 157 168 / 0.12);
+  border-color: var(--ink-8);
+  box-shadow: 0 0 0 1px var(--ink-8);
 }
 
 .wf-node.status-running {
-  border-color: var(--ink-6);
-  animation: node-breathe 1.8s var(--ease) infinite;
-}
-
-@keyframes node-breathe {
-  0%,
-  100% {
-    box-shadow: var(--shadow), 0 0 0 1px var(--ink-6);
-  }
-  50% {
-    box-shadow: var(--shadow), 0 0 0 3px var(--ink-4);
-  }
+  border-color: var(--ink-7);
 }
 
 .wf-node.status-waiting {
@@ -137,41 +205,30 @@
 
 .wf-node.status-error {
   border-color: var(--danger-border);
-  box-shadow: var(--shadow), 0 0 0 1px var(--danger-border);
-}
-
-.wf-node-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 31px;
-  padding: 6px 9px;
-  border-bottom: 1px solid var(--ink-5);
-  background: rgb(255 255 255 / 0.018);
 }
 
 .wf-node-mark {
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  color: var(--ink-9);
-}
-
-.wf-node-head strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 15px;
-  color: var(--text);
+  width: 40px;
+  height: 100%;
+  color: var(--accent);
 }
 
 .wf-node-body {
-  padding: 8px 9px 7px;
+  min-width: 0;
+  padding: 9px 11px 9px 0;
+}
+
+.wf-node-body strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--text);
 }
 
 .wf-node-description {
@@ -180,24 +237,21 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 10px;
-  line-height: 14px;
-  color: var(--text-secondary);
+  line-height: 15px;
+  color: var(--text-muted);
 }
 
 .wf-node-foot {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 7px;
+  margin-top: 5px;
   font-size: 9px;
   line-height: 12px;
 }
 
-.wf-node-kind {
-  color: var(--ink-8);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.wf-node-foot:empty {
+  display: none;
 }
 
 .wf-node-demo {
@@ -207,6 +261,15 @@
   color: var(--text-muted);
   font-size: 8px;
   font-weight: 500;
+}
+
+.wf-node-runtime {
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, #6d8cff 38%, var(--border));
+  border-radius: 4px;
+  color: #aab9ff;
+  font-size: 8px;
+  font-weight: 600;
 }
 
 .wf-node-status {
@@ -223,42 +286,105 @@
   color: var(--danger-text);
 }
 
+/* A condition needs room for its two branch labels beside the outputs. */
+.wf-node.is-condition {
+  min-height: 74px;
+}
+
+.wf-node.is-condition .wf-node-body {
+  padding-right: 40px;
+}
+
 .wf-branch {
   position: absolute;
-  right: 10px;
-  color: var(--ink-6);
+  right: 9px;
+  color: var(--ink-7);
   font-family: var(--font-mono);
   font-size: 9px;
+  line-height: 12px;
+  transform: translateY(-50%);
 }
 
 .wf-branch.is-true {
-  top: 30%;
+  top: 34%;
 }
 
 .wf-branch.is-false {
-  top: 68%;
+  top: 72%;
+}
+
+/* ---- Daytona sandbox boundary ----------------------------------------- */
+
+.sandbox-boundary {
+  width: 100%;
+  height: 100%;
+  min-width: 460px;
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px dashed color-mix(in srgb, #6d8cff 55%, var(--ink-6));
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgb(72 94 180 / 0.11), rgb(25 28 42 / 0.12)),
+    repeating-linear-gradient(-45deg, transparent 0 14px, rgb(130 150 255 / 0.025) 14px 15px);
+  box-shadow: inset 0 0 0 1px rgb(142 158 255 / 0.035);
+  transition: border-color var(--normal) var(--ease), background var(--normal) var(--ease);
+}
+
+.sandbox-boundary.is-selected {
+  border-color: #899cff;
+  background:
+    linear-gradient(180deg, rgb(72 94 180 / 0.16), rgb(25 28 42 / 0.13)),
+    repeating-linear-gradient(-45deg, transparent 0 14px, rgb(130 150 255 / 0.035) 14px 15px);
+}
+
+.sandbox-boundary-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 48px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgb(130 150 255 / 0.15);
+  background: rgb(19 22 35 / 0.5);
+}
+
+.sandbox-boundary-mark {
+  display: grid;
+  place-items: center;
+  color: #9bacff;
+}
+
+.sandbox-boundary-head > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sandbox-boundary-head strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sandbox-boundary-head small,
+.sandbox-boundary-hint {
+  color: #9ba6d2;
+  font-size: 9px;
+}
+
+.sandbox-boundary-hint {
+  padding: 10px 14px;
+  pointer-events: none;
+}
+
+.sandbox-resize-handle {
+  width: 9px !important;
+  height: 9px !important;
+  border: 1px solid var(--surface-raised) !important;
+  border-radius: 3px !important;
+  background: #899cff !important;
 }
 
 /* ---- Canvas overlays ----------------------------------------------------- */
-
-.canvas-note {
-  position: absolute;
-  z-index: 4;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
-  backdrop-filter: blur(8px);
-  color: var(--text-muted);
-  font-size: 11px;
-  pointer-events: none;
-}
 
 .canvas-empty {
   position: absolute;

@@ -16,6 +16,8 @@ export default defineSchema({
     webhookSlug: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
     lastScheduleMinuteByNode: v.optional(v.any()),
+    version: v.optional(v.number()),
+    currentVersionId: v.optional(v.id("workflowVersions")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -24,11 +26,27 @@ export default defineSchema({
     .index("by_webhook_slug_secret", ["webhookSlug", "webhookSecret"])
     .index("by_enabled", ["enabled"]),
 
+  workflowVersions: defineTable({
+    ownerKey: v.string(),
+    workflowId: v.id("workflows"),
+    version: v.number(),
+    name: v.string(),
+    description: v.string(),
+    enabled: v.boolean(),
+    nodes: v.array(v.any()),
+    edges: v.array(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_workflow_version", ["workflowId", "version"])
+    .index("by_owner_created_at", ["ownerKey", "createdAt"]),
+
   workflowRuns: defineTable({
     ownerKey: v.optional(v.string()),
     ownerUserId: v.optional(v.string()),
     workflowId: v.id("workflows"),
     workflowEngineId: v.optional(vWorkflowId),
+    workflowVersionId: v.optional(v.id("workflowVersions")),
+    workflowVersion: v.optional(v.number()),
     status: v.union(
       v.literal("queued"),
       v.literal("running"),
@@ -54,6 +72,8 @@ export default defineSchema({
     nodeLabel: v.string(),
     nodeType: v.string(),
     connectionRef: v.optional(v.string()),
+    sandboxBoundaryId: v.optional(v.string()),
+    sandboxId: v.optional(v.string()),
     status: v.union(
       v.literal("running"),
       v.literal("waiting"),

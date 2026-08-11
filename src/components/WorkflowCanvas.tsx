@@ -2,6 +2,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  MarkerType,
   MiniMap,
   ReactFlow,
   type Connection,
@@ -12,8 +13,15 @@ import {
 import { memo } from "react";
 import type { WorkflowNode } from "../types";
 import { WorkflowNodeComponent } from "./WorkflowNode";
+import { SandboxBoundaryNode } from "./SandboxBoundaryNode";
 
-const nodeTypes = { workflow: WorkflowNodeComponent };
+const nodeTypes = { workflow: WorkflowNodeComponent, sandbox: SandboxBoundaryNode };
+
+/* Solid bezier with an arrowhead: direction of flow readable without motion. */
+const defaultEdgeOptions = {
+  type: "default",
+  markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "#6e6e78" },
+};
 
 interface WorkflowCanvasProps {
   nodes: WorkflowNode[];
@@ -44,6 +52,7 @@ export const WorkflowCanvas = memo(function WorkflowCanvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        defaultEdgeOptions={defaultEdgeOptions}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
@@ -60,10 +69,18 @@ export const WorkflowCanvas = memo(function WorkflowCanvas({
         maxZoom={1.6}
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#1f1f23" />
-        <Controls showInteractive={false} />
-        <MiniMap nodeColor="#3a3a42" maskColor="rgba(10, 10, 11, .8)" pannable />
+        <Controls showInteractive={false} position="bottom-left" />
+        <MiniMap
+          position="bottom-right"
+          bgColor="#0e0e10"
+          nodeColor="#2a2a30"
+          nodeStrokeColor="#3a3a42"
+          nodeBorderRadius={3}
+          maskColor="rgba(10, 10, 11, .72)"
+          pannable
+          zoomable
+        />
       </ReactFlow>
-      <div className="canvas-note">Each step receives the result from the step before it</div>
     </section>
   );
 });

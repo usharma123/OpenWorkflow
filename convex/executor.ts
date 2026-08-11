@@ -5,12 +5,21 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from "./openrouterStream";
 import { applyApprovalDecision } from "./policies";
 import { renderTemplate, valueAtPath } from "./template";
+import {
+  inputPacketsForNode,
+  inputValueForPackets,
+  packetForNodeOutput,
+  terminalOutput,
+  topologicalNodes,
+  type ExecutionPacket,
+} from "../shared/executionGraph";
 
 export const workflow = new WorkflowManager(components.workflow);
 
 type NodeConfig = Record<string, unknown>;
 type WorkflowNode = {
   id: string;
+  parentId?: string;
   data: { label: string; nodeType: string; config: NodeConfig };
 };
 type WorkflowEdge = { source: string; target: string; sourceHandle?: string | null };
@@ -20,6 +29,8 @@ const connectorProviders: Record<string, string> = {
   googleDoc: "google-docs",
   slack: "slack",
 };
+
+const daytonaNodeTypes = new Set(["code", "shell", "git"]);
 
 function runRecordValue(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -42,33 +53,10 @@ function executionErrorMessage(error: unknown): string {
   if (message.includes("OPENROUTER_API_KEY is not configured")) {
     return "AI execution is not configured. Ask an administrator to add OPENROUTER_API_KEY in Convex, then retry the run.";
   }
+  if (message.includes("DAYTONA_API_KEY is not configured")) {
+    return "Daytona execution is not configured. Ask an administrator to add DAYTONA_API_KEY in Convex, then retry the run.";
+  }
   return message.match(/Uncaught Error:\s*([^\n]+)/)?.[1] ?? message;
-}
-
-function topologicalSort(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
-  const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  const indegree = new Map(nodes.map((node) => [node.id, 0]));
-  const outgoing = new Map<string, string[]>();
-  for (const edge of edges) {
-    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
-    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
-  }
-  const queue = nodes.filter((node) => indegree.get(node.id) === 0);
-  const ordered: WorkflowNode[] = [];
-  while (queue.length) {
-    const node = queue.shift()!;
-    ordered.push(node);
-    for (const target of outgoing.get(node.id) ?? []) {
-      const count = (indegree.get(target) ?? 1) - 1;
-      indegree.set(target, count);
-      if (count === 0) {
-        const next = nodesById.get(target);
-        if (next) queue.push(next);
-      }
-    }
-  }
-  if (ordered.length !== nodes.length) throw new Error("Workflow graphs cannot contain cycles.");
-  return ordered;
 }
 
 function isPrivateHost(hostname: string) {
@@ -91,8 +79,10 @@ export const loadRun = internalQuery({
   handler: async (ctx, { runId }) => {
     const run = await ctx.db.get(runId);
     if (!run) throw new Error("Run not found.");
-    const definition = await ctx.db.get(run.workflowId);
-    if (!definition) throw new Error("Workflow not found.");
+    const workflowDefinition = await ctx.db.get(run.workflowId);
+    if (!workflowDefinition) throw new Error("Workflow not found.");
+    const version = run.workflowVersionId ? await ctx.db.get(run.workflowVersionId) : null;
+    const definition = version ?? workflowDefinition;
     if (!run.ownerKey || !run.ownerUserId || run.ownerKey !== definition.ownerKey) {
       throw new Error("Run ownership is invalid.");
     }
@@ -107,6 +97,7 @@ export const startStep = internalMutation({
     nodeLabel: v.string(),
     nodeType: v.string(),
     connectionRef: v.optional(v.string()),
+    sandboxBoundaryId: v.optional(v.string()),
     input: v.any(),
     waiting: v.boolean(),
   },
@@ -121,6 +112,7 @@ export const startStep = internalMutation({
       nodeLabel: args.nodeLabel,
       nodeType: args.nodeType,
       connectionRef: args.connectionRef,
+      sandboxBoundaryId: args.sandboxBoundaryId,
       input: runRecordValue(args.input),
       status: args.waiting ? "waiting" : "running",
       startedAt: Date.now(),
@@ -134,6 +126,15 @@ export const startStep = internalMutation({
       }
     }
     return stepRunId;
+  },
+});
+
+export const attachSandbox = internalMutation({
+  args: { stepRunId: v.id("stepRuns"), sandboxId: v.string() },
+  handler: async (ctx, { stepRunId, sandboxId }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    if (!stepRun) throw new Error("Workflow step not found.");
+    await ctx.db.patch(stepRunId, { sandboxId });
   },
 });
 
@@ -198,11 +199,12 @@ export const executeNode = internalAction({
   args: {
     node: v.any(),
     input: v.any(),
+    stepOutputs: v.any(),
     ownerKey: v.string(),
     ownerUserId: v.string(),
     stepRunId: v.optional(v.id("stepRuns")),
   },
-  handler: async (ctx, { node, input, ownerKey, ownerUserId, stepRunId }): Promise<unknown> => {
+  handler: async (ctx, { node, input, stepOutputs, ownerKey, ownerUserId, stepRunId }): Promise<unknown> => {
     const typedNode = node as WorkflowNode;
     const { nodeType, config } = typedNode.data;
 
@@ -213,6 +215,7 @@ export const executeNode = internalAction({
       return ctx.runAction(internal.connectorExecution.executeLiveConnector, {
         node,
         input,
+        stepOutputs,
         ownerKey,
         ownerUserId,
       });
@@ -237,7 +240,7 @@ export const executeNode = internalAction({
     if (nodeType.endsWith("Trigger") || nodeType === "output") return input;
 
     if (nodeType === "transform") {
-      return { value: renderTemplate(String(config.template ?? "{{input}}"), input) };
+      return { value: renderTemplate(String(config.template ?? "{{input}}"), input, stepOutputs) };
     }
 
     if (nodeType === "condition") {
@@ -256,14 +259,14 @@ export const executeNode = internalAction({
     }
 
     if (nodeType === "http") {
-      const url = new URL(renderTemplate(String(config.url ?? ""), input));
+      const url = new URL(renderTemplate(String(config.url ?? ""), input, stepOutputs));
       if (url.protocol !== "https:" || isPrivateHost(url.hostname)) {
         throw new Error("HTTP blocks only allow public HTTPS destinations.");
       }
       const method = String(config.method ?? "GET").toUpperCase();
-      const headerText = renderTemplate(String(config.headers ?? "{}"), input);
+      const headerText = renderTemplate(String(config.headers ?? "{}"), input, stepOutputs);
       const headers = JSON.parse(headerText) as Record<string, string>;
-      const bodyText = renderTemplate(String(config.body ?? ""), input);
+      const bodyText = renderTemplate(String(config.body ?? ""), input, stepOutputs);
       const response = await fetch(url, {
         method,
         headers,
@@ -307,7 +310,7 @@ export const executeNode = internalAction({
           model: String(config.model ?? "openai/gpt-5.6-luna"),
           messages: [
             { role: "system", content: String(config.systemPrompt ?? "You are a helpful assistant.") },
-            { role: "user", content: renderTemplate(String(config.prompt ?? "{{input}}"), input) },
+            { role: "user", content: renderTemplate(String(config.prompt ?? "{{input}}"), input, stepOutputs) },
           ],
           tools,
           stream: true,
@@ -361,7 +364,7 @@ export const executeNode = internalAction({
 
     if (nodeType === "googleDoc") {
       const content = typeof input === "object" && input && typeof (input as Record<string, unknown>).content === "string" ? String((input as Record<string, unknown>).content) : JSON.stringify(input, null, 2);
-      const title = renderTemplate(String(config.title ?? "OpenWorkflow brief"), input);
+      const title = renderTemplate(String(config.title ?? "OpenWorkflow brief"), input, stepOutputs);
       if (executionMode === "demo") return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), documentTitle: title, documentUrl: "https://docs.google.com/document/d/demo-openworkflow-inbox-brief/edit", documentMode: "demo" };
       throw new Error("Connected Google Docs must use a user-owned Google connection.");
     }
@@ -369,7 +372,7 @@ export const executeNode = internalAction({
     if (nodeType === "slack") {
       const configuredChannel = String(config.channel ?? "#leadership-updates");
       const channel = configuredChannel;
-      const message = renderTemplate(String(config.message ?? "{{input.documentUrl}}"), input);
+      const message = renderTemplate(String(config.message ?? "{{input.documentUrl}}"), input, stepOutputs);
       if (executionMode === "demo") return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), delivery: { provider: "slack", channel, message, status: "simulated" } };
       throw new Error("Connected Slack must use a user-owned workspace connection.");
     }
@@ -382,32 +385,24 @@ export const executeWorkflow = workflow
   .define({ args: { runId: v.id("workflowRuns") }, returns: v.any() })
   .handler(async (step, { runId }): Promise<unknown> => {
     let activeStepRunId: import("./_generated/dataModel").Id<"stepRuns"> | undefined;
+    const sandboxIdsByBoundary = new Map<string, string>();
     try {
       const { run, definition } = await step.runQuery(internal.executor.loadRun, { runId });
       if (!run.ownerKey || !run.ownerUserId) throw new Error("Run ownership is invalid.");
-      const nodes = definition.nodes as WorkflowNode[];
+      const allNodes = definition.nodes as WorkflowNode[];
+      const nodes = allNodes.filter((node) => node.data.nodeType !== "daytonaSandbox");
       const edges = definition.edges as WorkflowEdge[];
-      const ordered = topologicalSort(nodes, edges);
-      const incomingByTarget = new Map<string, WorkflowEdge[]>();
-      for (const edge of edges) {
-        const incoming = incomingByTarget.get(edge.target);
-        if (incoming) incoming.push(edge);
-        else incomingByTarget.set(edge.target, [edge]);
-      }
-      const decisions = new Map<string, boolean>();
-      let value: unknown = run.input;
+      const ordered = topologicalNodes(nodes, edges);
+      const outputs = new Map<string, ExecutionPacket>();
 
       for (const node of ordered) {
         const { label, nodeType, config } = node.data;
-        const incoming = incomingByTarget.get(node.id) ?? [];
-        const blocked = incoming.some((edge) => {
-          const decision = decisions.get(edge.source);
-          return decision !== undefined && edge.sourceHandle && edge.sourceHandle !== String(decision);
-        });
-        if (blocked) {
+        const incoming = inputPacketsForNode(node.id, edges, outputs);
+        if (incoming.hasIncomingEdges && incoming.packets.length === 0) {
           await step.runMutation(internal.executor.skipStep, { runId, node });
           continue;
         }
+        const value = inputValueForPackets(incoming.packets, run.input);
 
         const isApproval = nodeType === "approval";
         const stepRunId = await step.runMutation(internal.executor.startStep, {
@@ -416,6 +411,7 @@ export const executeWorkflow = workflow
           nodeLabel: label,
           nodeType,
           connectionRef: typeof config.connectionRef === "string" ? config.connectionRef : undefined,
+          sandboxBoundaryId: node.parentId,
           input: value,
           waiting: isApproval,
         });
@@ -429,33 +425,74 @@ export const executeWorkflow = workflow
             name: `approval:${node.id}`,
             validator: v.object({ approved: v.boolean(), note: v.optional(v.string()) }),
           });
-          value = applyApprovalDecision(value, approval, Date.now());
+          const output = applyApprovalDecision(value, approval, Date.now());
+          outputs.set(node.id, packetForNodeOutput(node, output));
+        } else if (daytonaNodeTypes.has(nodeType)) {
+          if (!node.parentId) throw new Error(`${label} must be inside a Daytona sandbox boundary.`);
+          const boundary = allNodes.find((candidate) =>
+            candidate.id === node.parentId && candidate.data.nodeType === "daytonaSandbox");
+          if (!boundary) throw new Error(`The Daytona sandbox boundary for ${label} is missing.`);
+          const result = await step.runAction(internal.daytonaExecution.execute, {
+            node,
+            input: value,
+            boundaryId: boundary.id,
+            boundaryConfig: boundary.data.config,
+            existingSandboxId: sandboxIdsByBoundary.get(boundary.id),
+            stepRunId,
+          });
+          sandboxIdsByBoundary.set(boundary.id, result.sandboxId);
+          outputs.set(node.id, packetForNodeOutput(node, result.output));
         } else {
+          const stepOutputs = Object.fromEntries(
+            [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
+          );
           const isNonIdempotentLiveWrite =
             String(config.executionMode ?? "demo") === "live" &&
             (nodeType === "googleDoc" || nodeType === "slack");
-          value = await step.runAction(
+          const output = await step.runAction(
             internal.executor.executeNode,
-            { node, input: value, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
+            { node, input: value, stepOutputs, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
             isNonIdempotentLiveWrite
               ? undefined
               : { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },
           );
+          outputs.set(node.id, packetForNodeOutput(node, output));
         }
 
-        if (nodeType === "condition") {
-          decisions.set(node.id, Boolean((value as { passed?: boolean })?.passed));
+        if (nodeType === "delay") {
+          outputs.set(node.id, packetForNodeOutput(node, value));
         }
-        await step.runMutation(internal.executor.finishStep, { stepRunId, output: value });
+        const packet = outputs.get(node.id);
+        if (!packet) throw new Error(`${label} did not produce an output.`);
+        await step.runMutation(internal.executor.finishStep, { stepRunId, output: packet.value });
         activeStepRunId = undefined;
       }
 
-      await step.runMutation(internal.executor.completeRun, { runId, output: value });
-      return value;
+      const output = terminalOutput(nodes, edges, outputs);
+      if (sandboxIdsByBoundary.size) {
+        try {
+          await step.runAction(internal.daytonaExecution.cleanup, {
+            sandboxIds: [...sandboxIdsByBoundary.values()],
+          });
+        } catch {
+          // Every sandbox is also ephemeral and TTL-bound; cleanup is best effort.
+        }
+      }
+      await step.runMutation(internal.executor.completeRun, { runId, output });
+      return output;
     } catch (error) {
       const message = executionErrorMessage(error);
       if (activeStepRunId) {
         await step.runMutation(internal.executor.failStep, { stepRunId: activeStepRunId, error: message });
+      }
+      if (sandboxIdsByBoundary.size) {
+        try {
+          await step.runAction(internal.daytonaExecution.cleanup, {
+            sandboxIds: [...sandboxIdsByBoundary.values()],
+          });
+        } catch {
+          // TTL-bound ephemeral sandboxes remain the final cleanup guard.
+        }
       }
       await step.runMutation(internal.executor.failRun, { runId, error: message });
       return { error: message };

@@ -2,11 +2,15 @@ import {
   Bot,
   Braces,
   Clock3,
+  Container,
+  FileCode2,
+  GitFork,
   GitBranch,
   Globe2,
   Play,
   Radio,
   Send,
+  Terminal,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -38,6 +42,10 @@ const GLYPHS: Record<WorkflowNodeType, LucideIcon> = {
   transform: Braces,
   delay: Clock3,
   approval: UserCheck,
+  daytonaSandbox: Container,
+  code: FileCode2,
+  shell: Terminal,
+  git: GitFork,
   output: Send,
 };
 

@@ -4,7 +4,7 @@ import { NODE_CATALOG } from "../catalog";
 import type { NodeCategory, WorkflowNodeType } from "../types";
 import { NodeMark } from "./icons";
 
-const CATEGORIES: NodeCategory[] = ["Start", "Think", "Review", "Deliver", "Advanced"];
+const CATEGORIES: NodeCategory[] = ["Start", "Think", "Compute", "Review", "Deliver", "Advanced"];
 
 function startDrag(event: React.DragEvent, type: WorkflowNodeType) {
   event.dataTransfer.setData("application/openworkflow-node", type);
@@ -49,6 +49,7 @@ export const NodePalette = memo(function NodePalette({ onAdd }: { onAdd: (type: 
                 <button
                   className="palette-item"
                   key={item.type}
+                  data-cat={item.category}
                   draggable
                   onDragStart={(event) => startDrag(event, item.type)}
                   onClick={() => onAdd(item.type)}

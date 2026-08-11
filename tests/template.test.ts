@@ -12,4 +12,19 @@ describe("workflow templates", () => {
     expect(renderTemplate("{{input.count}}", { count: 3 })).toBe("3");
     expect(renderTemplate("{{input.missing}}", {})).toBe('""');
   });
+
+  test("resolves explicit outputs from earlier steps", () => {
+    const outputs = {
+      "gmail-a1b2": { messages: [{ subject: "Budget review" }], count: 1 },
+    };
+    expect(renderTemplate("Subject: {{ steps.gmail-a1b2.messages.0.subject }}", {}, outputs))
+      .toBe("Subject: Budget review");
+    expect(renderTemplate("{{ steps.gmail-a1b2.count }}", {}, outputs)).toBe("1");
+    expect(renderTemplate("{{ steps.unknown.value }}", {}, outputs)).toBe('""');
+  });
+
+  test("does not traverse prototype keys", () => {
+    expect(valueAtPath({}, "constructor.name")).toBeUndefined();
+    expect(renderTemplate("{{ input.__proto__.polluted }}", {})).toBe('""');
+  });
 });

@@ -31,10 +31,11 @@ export const executeLiveConnector = internalAction({
   args: {
     node: v.any(),
     input: v.any(),
+    stepOutputs: v.any(),
     ownerKey: v.string(),
     ownerUserId: v.string(),
   },
-  handler: async (ctx, { node, input, ownerKey, ownerUserId }): Promise<unknown> => {
+  handler: async (ctx, { node, input, stepOutputs, ownerKey, ownerUserId }): Promise<unknown> => {
     const typedNode = node as WorkflowNode;
     const { nodeType, config } = typedNode.data;
     const connectionRef = String(config.connectionRef ?? "");
@@ -91,7 +92,7 @@ export const executeLiveConnector = internalAction({
       const content = typeof input === "object" && input && typeof (input as Record<string, unknown>).content === "string"
         ? String((input as Record<string, unknown>).content)
         : JSON.stringify(input, null, 2);
-      const title = renderTemplate(String(config.title ?? "OpenWorkflow brief"), input);
+      const title = renderTemplate(String(config.title ?? "OpenWorkflow brief"), input, stepOutputs);
       const createResponse = await fetch("https://docs.googleapis.com/v1/documents", {
         method: "POST",
         headers: { Authorization: `Bearer ${oauth.token}`, "Content-Type": "application/json" },
@@ -151,7 +152,7 @@ export const executeLiveConnector = internalAction({
       const token = decryptSecret(connection.secretCiphertext, connection.secretIv);
       const channel = String(config.channel ?? "");
       if (!channel || channel.startsWith("#")) throw new Error("Slack connected mode requires a channel ID such as C0123456789, not a #channel name.");
-      const message = renderTemplate(String(config.message ?? "{{input.documentUrl}}"), input);
+      const message = renderTemplate(String(config.message ?? "{{input.documentUrl}}"), input, stepOutputs);
       const response = await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
