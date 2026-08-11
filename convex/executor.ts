@@ -15,6 +15,7 @@ import {
   topologicalNodes,
   type ExecutionPacket,
 } from "../shared/executionGraph";
+import { stepRetryPolicy } from "../shared/reliability";
 
 export const workflow = new WorkflowManager(components.workflow);
 
@@ -288,6 +289,7 @@ export const executeNode = internalAction({
         headers,
         body: method === "GET" || method === "HEAD" ? undefined : bodyText || undefined,
         redirect: "error",
+        signal: AbortSignal.timeout(Math.min(900, Math.max(1, Number(config.timeoutSeconds ?? 30))) * 1000),
       });
       if (!response.ok) {
         const errorText = await response.text();
@@ -332,6 +334,7 @@ export const executeNode = internalAction({
           stream: true,
           stream_options: { include_usage: true },
         }),
+        signal: AbortSignal.timeout(Math.min(900, Math.max(1, Number(config.timeoutSeconds ?? 120))) * 1000),
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
@@ -486,12 +489,13 @@ export const executeWorkflow = workflow
             const isNonIdempotentLiveWrite =
               String(config.executionMode ?? "demo") === "live" &&
               (nodeType === "googleDoc" || nodeType === "slack");
+            const { retryAttempts, retryBackoffMs } = stepRetryPolicy(config);
             const output = await step.runAction(
               internal.executor.executeNode,
               { node, input: value, stepOutputs, ownerKey: run.ownerKey, ownerUserId: run.ownerUserId, stepRunId },
-              isNonIdempotentLiveWrite
+              isNonIdempotentLiveWrite || retryAttempts === 0
                 ? undefined
-                : { retry: { maxAttempts: 3, initialBackoffMs: 250, base: 2 } },
+                : { retry: { maxAttempts: retryAttempts + 1, initialBackoffMs: retryBackoffMs, base: 2 } },
             );
             outputs.set(node.id, packetForNodeOutput(node, output));
           }

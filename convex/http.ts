@@ -31,7 +31,8 @@ http.route({
     if (!workflow) return Response.json({ error: "Active webhook workflow not found." }, { status: 404 });
     let input: unknown = {};
     try { input = await request.json(); } catch { input = {}; }
-    const runId = await ctx.runMutation(internal.runs.startForWebhook, { workflowId: workflow._id, input });
+    const idempotencyKey = request.headers.get("idempotency-key") ?? request.headers.get("x-idempotency-key") ?? undefined;
+    const runId = await ctx.runMutation(internal.runs.startForWebhook, { workflowId: workflow._id, input, idempotencyKey });
     return Response.json({ accepted: true, runId }, { status: 202 });
   }),
 });

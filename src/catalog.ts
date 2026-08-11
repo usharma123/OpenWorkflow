@@ -246,6 +246,7 @@ export const STARTER_WORKFLOW: WorkflowDefinition = {
   name: "Daily inbox brief",
   description: "Summarize priority Gmail messages, create a Google Doc, get approval, and share it in Slack.",
   enabled: false,
+  maxConcurrentRuns: 3,
   updatedAt: Date.now(),
   nodes: [
     {

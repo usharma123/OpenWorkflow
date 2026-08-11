@@ -8,25 +8,28 @@ const workflowArgs = {
   name: v.string(),
   description: v.string(),
   enabled: v.boolean(),
+  maxConcurrentRuns: v.number(),
   nodes: v.array(v.any()),
   edges: v.array(v.any()),
   updatedAt: v.number(),
 };
 
 function definitionChanged(
-  current: { name: string; description: string; enabled: boolean; nodes: unknown[]; edges: unknown[] },
-  next: { name: string; description: string; enabled: boolean; nodes: unknown[]; edges: unknown[] },
+  current: { name: string; description: string; enabled: boolean; maxConcurrentRuns?: number; nodes: unknown[]; edges: unknown[] },
+  next: { name: string; description: string; enabled: boolean; maxConcurrentRuns: number; nodes: unknown[]; edges: unknown[] },
 ) {
   return JSON.stringify({
     name: current.name,
     description: current.description,
     enabled: current.enabled,
+    maxConcurrentRuns: current.maxConcurrentRuns ?? 3,
     nodes: current.nodes,
     edges: current.edges,
   }) !== JSON.stringify({
     name: next.name,
     description: next.description,
     enabled: next.enabled,
+    maxConcurrentRuns: next.maxConcurrentRuns,
     nodes: next.nodes,
     edges: next.edges,
   });
@@ -62,6 +65,9 @@ export const upsert = mutation({
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
     validateWorkflowGraph(args.nodes, args.edges);
+    if (!Number.isInteger(args.maxConcurrentRuns) || args.maxConcurrentRuns < 1 || args.maxConcurrentRuns > 25) {
+      throw new Error("Concurrent run limit must be between 1 and 25.");
+    }
     const existing = await ctx.db
       .query("workflows")
       .withIndex("by_owner_external_id", (q) =>
@@ -210,6 +216,7 @@ export const duplicate = mutation({
       name: trimmed,
       description: source.description,
       enabled: false,
+      maxConcurrentRuns: source.maxConcurrentRuns ?? 3,
       nodes: source.nodes,
       edges: source.edges,
       webhookSlug: source.webhookSlug,

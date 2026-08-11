@@ -11,6 +11,7 @@ export default defineSchema({
     name: v.string(),
     description: v.string(),
     enabled: v.boolean(),
+    maxConcurrentRuns: v.optional(v.number()),
     nodes: v.array(v.any()),
     edges: v.array(v.any()),
     webhookSlug: v.optional(v.string()),
@@ -56,6 +57,7 @@ export default defineSchema({
       v.literal("failed"),
     ),
     trigger: v.string(),
+    idempotencyKey: v.optional(v.string()),
     runMode: v.optional(v.union(v.literal("full"), v.literal("single"), v.literal("through"), v.literal("resume"))),
     scopeNodeId: v.optional(v.string()),
     retryOfRunId: v.optional(v.id("workflowRuns")),
@@ -67,6 +69,7 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index("by_workflow", ["workflowId"])
+    .index("by_workflow_status", ["workflowId", "status"])
     .index("by_status", ["status"])
     .index("by_owner_started_at", ["ownerKey", "startedAt"]),
 
@@ -161,5 +164,14 @@ export default defineSchema({
   })
     .index("by_dedupe_key", ["dedupeKey"])
     .index("by_workflow", ["workflowId"])
+    .index("by_created_at", ["createdAt"]),
+
+  runClaims: defineTable({
+    workflowId: v.id("workflows"),
+    idempotencyKey: v.string(),
+    runId: v.id("workflowRuns"),
+    createdAt: v.number(),
+  })
+    .index("by_workflow_key", ["workflowId", "idempotencyKey"])
     .index("by_created_at", ["createdAt"]),
 });

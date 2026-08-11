@@ -66,6 +66,7 @@ interface EditorState {
   name: string;
   description: string;
   enabled: boolean;
+  maxConcurrentRuns: number;
   selectedNodeId?: string;
   saved: boolean;
   running: boolean;
@@ -103,6 +104,7 @@ function useWorkflowEditorController() {
     name: initial.name,
     description: initial.description,
     enabled: initial.enabled,
+    maxConcurrentRuns: initial.maxConcurrentRuns,
     saved: true,
     running: false,
     approvalBusy: false,
@@ -113,6 +115,7 @@ function useWorkflowEditorController() {
     name,
     description,
     enabled,
+    maxConcurrentRuns,
     selectedNodeId,
     saved,
     running,
@@ -160,6 +163,7 @@ function useWorkflowEditorController() {
           name: remote.name,
           description: remote.description,
           enabled: remote.enabled,
+          maxConcurrentRuns: remote.maxConcurrentRuns ?? 3,
           backendLoaded: true,
         });
         setNodes(persistableNodes(remote.nodes as WorkflowNode[]));
@@ -187,6 +191,7 @@ function useWorkflowEditorController() {
         name,
         description,
         enabled,
+        maxConcurrentRuns,
         nodes: persistableNodes(nodes),
         edges,
         updatedAt: Date.now(),
@@ -201,6 +206,7 @@ function useWorkflowEditorController() {
           name: definition.name,
           description: definition.description,
           enabled: definition.enabled,
+          maxConcurrentRuns: definition.maxConcurrentRuns,
           nodes: definition.nodes,
           edges: definition.edges,
           updatedAt: definition.updatedAt,
@@ -214,7 +220,7 @@ function useWorkflowEditorController() {
         );
     }, 500);
     return () => window.clearTimeout(saveTimer.current);
-  }, [backendLoaded, description, edges, enabled, initial, name, nodes, patchEditor, setNotice]);
+  }, [backendLoaded, description, edges, enabled, initial, maxConcurrentRuns, name, nodes, patchEditor, setNotice]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -484,6 +490,7 @@ function useWorkflowEditorController() {
           name,
           description,
           enabled,
+          maxConcurrentRuns,
           nodes: persistableNodes(nodes),
           edges,
           updatedAt,
@@ -500,7 +507,7 @@ function useWorkflowEditorController() {
         await observeBackendRun(client, runId);
       } else {
         const demoRun = await runDemo(
-          { ...initial, name, description, enabled, nodes, edges, updatedAt: Date.now() },
+          { ...initial, name, description, enabled, maxConcurrentRuns, nodes, edges, updatedAt: Date.now() },
           () => undefined,
           (nodeId, status) =>
             setNodes((current) =>
@@ -592,6 +599,7 @@ function useWorkflowEditorController() {
       name: starter.name,
       description: starter.description,
       enabled: starter.enabled,
+      maxConcurrentRuns: starter.maxConcurrentRuns,
       selectedNodeId: undefined,
     });
     setNodes(starter.nodes);
@@ -602,6 +610,7 @@ function useWorkflowEditorController() {
   return {
     name,
     enabled,
+    maxConcurrentRuns,
     saved,
     running,
     nodes,
@@ -649,6 +658,7 @@ function useWorkflowEditorController() {
     openConnectors: () => navigate("/connections"),
     setName: (name: string) => patchEditor({ name }),
     setEnabled: (enabled: boolean) => patchEditor({ enabled }),
+    setMaxConcurrentRuns: (maxConcurrentRuns: number) => patchEditor({ maxConcurrentRuns }),
     setPanelMode: (panelMode: PanelMode) => patchEditor({ panelMode }),
   };
 }
@@ -656,6 +666,7 @@ function useWorkflowEditorController() {
 function WorkflowEditorView({
   name,
   enabled,
+  maxConcurrentRuns,
   saved,
   running,
   nodes,
@@ -688,6 +699,7 @@ function WorkflowEditorView({
   openConnectors,
   setName,
   setEnabled,
+  setMaxConcurrentRuns,
   setPanelMode,
 }: ReturnType<typeof useWorkflowEditorController>) {
   return (
@@ -719,6 +731,16 @@ function WorkflowEditorView({
               onChange={(event) => setEnabled(event.target.checked)}
             />
             <span>{enabled ? "Active" : "Draft"}</span>
+          </label>
+          <label className="run-limit" title="Maximum queued, running, or waiting runs for this workflow">
+            <span>Parallel runs</span>
+            <input
+              type="number"
+              min={1}
+              max={25}
+              value={maxConcurrentRuns}
+              onChange={(event) => setMaxConcurrentRuns(Math.min(25, Math.max(1, Number(event.target.value) || 1)))}
+            />
           </label>
           <button className="btn btn-primary" onClick={() => void runWorkflow()} disabled={running}>
             {running ? <Loader2 className="spin" size={14} /> : <Play size={14} fill="currentColor" />}

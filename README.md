@@ -167,6 +167,11 @@ Workflow runs are pinned to an immutable workflow version. Connections carry ind
 packets, so sibling branches receive their common parent's output and multi-input joins receive an
 `items` array plus source provenance instead of whichever branch happened to run last.
 
+Retries, exponential backoff, and HTTP/model request timeouts are configurable per step. Each
+workflow also enforces a 1–25 active-run concurrency limit (three by default). Webhook callers can
+send `Idempotency-Key` or `X-Idempotency-Key`; repeated keys return the original run for 24 hours
+instead of starting duplicate work. Live connector writes are never automatically retried.
+
 ## 7. Deploy with Vercel
 
 Vercel serves the frontend; Convex owns durable execution and secrets.

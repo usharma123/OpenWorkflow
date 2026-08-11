@@ -171,6 +171,26 @@
   accent-color: var(--ink-9);
 }
 
+.run-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-7);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.run-limit input {
+  width: 48px;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--ink-10);
+  font: inherit;
+}
+
 /* Expanded run inside the history list. */
 .run-detail {
   margin: -2px 0 8px;

@@ -44,6 +44,7 @@ export function WorkflowsRoute() {
         name: "Untitled workflow",
         description: STARTER_WORKFLOW.description,
         enabled: false,
+        maxConcurrentRuns: 3,
         nodes: structuredClone(STARTER_WORKFLOW.nodes),
         edges: structuredClone(STARTER_WORKFLOW.edges),
         updatedAt: Date.now(),

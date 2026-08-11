@@ -9,5 +9,6 @@ crons.interval("remove expired OAuth states", { minutes: 10 }, internal.connecti
 crons.interval("remove pre-auth connector rows", { hours: 1 }, internal.connections.cleanupLegacyConnections);
 crons.interval("backfill indexed webhook slugs", { hours: 1 }, internal.workflows.backfillWebhookSlugs);
 crons.interval("remove old trigger dedupe keys", { hours: 6 }, internal.googleTriggerState.cleanup);
+crons.interval("remove expired run idempotency keys", { hours: 6 }, internal.runs.cleanupRunClaims);
 
 export default crons;

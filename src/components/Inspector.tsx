@@ -611,6 +611,35 @@ export function Inspector({
         </section>
       )}
 
+      {!type.endsWith("Trigger") && !["approval", "delay", "output", "daytonaSandbox", "googleDoc", "slack"].includes(type) && (
+        <section className="inspector-section">
+          <span className="t-eyebrow">Reliability</span>
+          <Num
+            label="Retries after failure"
+            value={Number(config.retryAttempts ?? 2)}
+            onChange={(value) => set("retryAttempts", value)}
+            min={0}
+            max={5}
+          />
+          <Num
+            label="Initial retry delay (ms)"
+            value={Number(config.retryBackoffMs ?? 250)}
+            onChange={(value) => set("retryBackoffMs", value)}
+            min={100}
+            max={60000}
+          />
+          {["http", "ai"].includes(type) && (
+            <Num
+              label="Timeout (seconds)"
+              value={Number(config.timeoutSeconds ?? (type === "ai" ? 120 : 30))}
+              onChange={(value) => set("timeoutSeconds", value)}
+              min={1}
+              max={900}
+            />
+          )}
+        </section>
+      )}
+
       <div className="inspector-actions">
         <button className="btn" onClick={onDuplicate}>
           <Copy size={14} /> Duplicate

@@ -43,6 +43,7 @@ export interface WorkflowDefinition {
   name: string;
   description: string;
   enabled: boolean;
+  maxConcurrentRuns: number;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   updatedAt: number;

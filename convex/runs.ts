@@ -5,6 +5,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { requirePrincipal } from "./auth";
+import { workflowConcurrencyLimit } from "../shared/reliability";
 
 export async function ensureWorkflowVersion(ctx: MutationCtx, definition: Doc<"workflows">) {
   if (definition.currentVersionId) {
@@ -32,9 +33,30 @@ export async function createPinnedRun(
   definition: Doc<"workflows">,
   trigger: string,
   input: unknown,
-  options: { runMode?: "full" | "single" | "through" | "resume"; scopeNodeId?: string } = {},
+  options: {
+    runMode?: "full" | "single" | "through" | "resume";
+    scopeNodeId?: string;
+    idempotencyKey?: string;
+  } = {},
 ) {
   if (!definition.ownerKey || !definition.ownerUserId) throw new Error("Workflow ownership is invalid.");
+  const idempotencyKey = options.idempotencyKey?.trim().slice(0, 200);
+  if (idempotencyKey) {
+    const existingClaim = await ctx.db
+      .query("runClaims")
+      .withIndex("by_workflow_key", (q) => q.eq("workflowId", definition._id).eq("idempotencyKey", idempotencyKey))
+      .unique();
+    if (existingClaim) return existingClaim.runId;
+  }
+  const activeStatuses = ["queued", "running", "waiting"] as const;
+  const activeRuns = await Promise.all(activeStatuses.map((status) =>
+    ctx.db.query("workflowRuns")
+      .withIndex("by_workflow_status", (q) => q.eq("workflowId", definition._id).eq("status", status))
+      .take(25)));
+  const maxConcurrentRuns = workflowConcurrencyLimit(definition.maxConcurrentRuns);
+  if (activeRuns.reduce((count, runs) => count + runs.length, 0) >= maxConcurrentRuns) {
+    throw new Error(`Workflow already has ${maxConcurrentRuns} active runs. Try again after one finishes.`);
+  }
   const version = await ensureWorkflowVersion(ctx, definition);
   const runId = await ctx.db.insert("workflowRuns", {
     workflowId: definition._id,
@@ -44,11 +66,15 @@ export async function createPinnedRun(
     ownerUserId: definition.ownerUserId,
     status: "queued",
     trigger,
+    idempotencyKey,
     runMode: options.runMode ?? "full",
     scopeNodeId: options.scopeNodeId,
     input,
     startedAt: Date.now(),
   });
+  if (idempotencyKey) {
+    await ctx.db.insert("runClaims", { workflowId: definition._id, idempotencyKey, runId, createdAt: Date.now() });
+  }
   const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId });
   await ctx.db.patch(runId, { workflowEngineId });
   return runId;
@@ -90,6 +116,7 @@ export const startRun = mutation({
     trigger: v.optional(v.string()),
     runMode: v.optional(v.union(v.literal("full"), v.literal("single"), v.literal("through"))),
     scopeNodeId: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
@@ -112,17 +139,27 @@ export const startRun = mutation({
       { ...definition, ownerUserId: principal.userId },
       args.trigger ?? "manual",
       args.input,
-      { runMode, scopeNodeId: args.scopeNodeId },
+      { runMode, scopeNodeId: args.scopeNodeId, idempotencyKey: args.idempotencyKey },
     );
   },
 });
 
 export const startForWebhook = internalMutation({
-  args: { workflowId: v.id("workflows"), input: v.any() },
-  handler: async (ctx, { workflowId, input }) => {
+  args: { workflowId: v.id("workflows"), input: v.any(), idempotencyKey: v.optional(v.string()) },
+  handler: async (ctx, { workflowId, input, idempotencyKey }) => {
     const definition = await ctx.db.get(workflowId);
     if (!definition) throw new Error("Workflow not found.");
-    return createPinnedRun(ctx, definition, "webhook", input);
+    return createPinnedRun(ctx, definition, "webhook", input, { idempotencyKey });
+  },
+});
+
+export const cleanupRunClaims = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 24 * 60 * 60_000;
+    const claims = await ctx.db.query("runClaims").withIndex("by_created_at", (q) => q.lt("createdAt", cutoff)).take(500);
+    await Promise.all(claims.map((claim) => ctx.db.delete(claim._id)));
+    return claims.length;
   },
 });
 
