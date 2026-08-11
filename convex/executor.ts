@@ -397,10 +397,17 @@ export const executeWorkflow = workflow
       const ordered = topologicalNodes(nodes, edges).filter((node) => activeNodeIds.has(node.id));
       const outputs = new Map<string, ExecutionPacket>();
 
+      if (run.seedOutputs && typeof run.seedOutputs === "object" && !Array.isArray(run.seedOutputs)) {
+        for (const [nodeId, output] of Object.entries(run.seedOutputs as Record<string, unknown>)) {
+          const node = nodes.find((candidate) => candidate.id === nodeId);
+          if (node && !activeNodeIds.has(nodeId)) outputs.set(nodeId, packetForNodeOutput(node, output));
+        }
+      }
+
       if ((run.runMode ?? "full") !== "full") {
         for (const node of nodes) {
           if (activeNodeIds.has(node.id)) continue;
-          if (Object.prototype.hasOwnProperty.call(node.data.config, "pinnedOutput")) {
+          if (!outputs.has(node.id) && Object.prototype.hasOwnProperty.call(node.data.config, "pinnedOutput")) {
             outputs.set(node.id, packetForNodeOutput(node, node.data.config.pinnedOutput));
           }
         }

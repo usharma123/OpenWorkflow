@@ -14,6 +14,7 @@ export const renameWorkflowRef = api.workflows.rename;
 export const duplicateWorkflowRef = api.workflows.duplicate;
 export const removeWorkflowRef = api.workflows.remove;
 export const startRunRef = api.runs.startRun;
+export const retryRunRef = api.runs.retry;
 export const getRunRef = api.runs.get;
 export const approveRunRef = api.runs.approve;
 export const listConnectionsRef = api.connections.list;

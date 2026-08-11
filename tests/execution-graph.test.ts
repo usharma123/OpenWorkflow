@@ -17,6 +17,7 @@ describe("port-aware workflow execution", () => {
     const edges = [{ source: "a", target: "b" }, { source: "b", target: "c" }];
     expect([...nodeIdsForRunScope(nodes, edges, "single", "c")]).toEqual(["c"]);
     expect([...nodeIdsForRunScope(nodes, edges, "through", "c")].sort()).toEqual(["a", "b", "c"]);
+    expect([...nodeIdsForRunScope(nodes, edges, "resume", "b")].sort()).toEqual(["b", "c"]);
     expect(() => nodeIdsForRunScope(nodes, edges, "single", "missing")).toThrow("no longer exists");
   });
   test("keeps sibling branches on the output of their common parent", () => {

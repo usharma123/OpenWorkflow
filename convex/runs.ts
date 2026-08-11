@@ -126,6 +126,56 @@ export const startForWebhook = internalMutation({
   },
 });
 
+export const retry = mutation({
+  args: { runId: v.id("workflowRuns") },
+  handler: async (ctx, { runId }) => {
+    const principal = await requirePrincipal(ctx);
+    const previous = await ctx.db.get(runId);
+    if (!previous || previous.ownerKey !== principal.ownerKey) throw new Error("Run not found.");
+    if (previous.status !== "failed") throw new Error("Only a failed run can be retried.");
+    const definition = await ctx.db.get(previous.workflowId);
+    if (!definition || definition.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
+    const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
+    const failedStep = [...steps].reverse().find((step) => step.status === "failed");
+    if (!failedStep) throw new Error("The failed step could not be identified.");
+    const version = previous.workflowVersionId ? await ctx.db.get(previous.workflowVersionId) : await ensureWorkflowVersion(ctx, definition);
+    if (!version || version.workflowId !== definition._id) throw new Error("The workflow version for this run is unavailable.");
+    const seedOutputs = Object.fromEntries(
+      steps
+        .filter((step) => step.status === "completed" && step.output !== undefined)
+        .map((step) => [step.nodeId, step.output]),
+    );
+    const retryRunId = await ctx.db.insert("workflowRuns", {
+      workflowId: definition._id,
+      workflowVersionId: version._id,
+      workflowVersion: version.version,
+      ownerKey: principal.ownerKey,
+      ownerUserId: principal.userId,
+      status: "queued",
+      trigger: "retry",
+      runMode: "resume",
+      scopeNodeId: failedStep.nodeId,
+      retryOfRunId: runId,
+      seedOutputs,
+      input: previous.input,
+      startedAt: Date.now(),
+    });
+    const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId: retryRunId });
+    await ctx.db.patch(retryRunId, { workflowEngineId });
+    await ctx.db.insert("auditLogs", {
+      ownerKey: principal.ownerKey,
+      actorUserId: principal.userId,
+      runId: retryRunId,
+      event: "run.retry",
+      outcome: "started",
+      actor: principal.userId,
+      detail: `Retry of ${runId} from ${failedStep.nodeLabel}`,
+      createdAt: Date.now(),
+    });
+    return retryRunId;
+  },
+});
+
 export const approve = mutation({
   args: { runId: v.id("workflowRuns"), nodeId: v.string(), approved: v.boolean(), note: v.optional(v.string()) },
   handler: async (ctx, args) => {

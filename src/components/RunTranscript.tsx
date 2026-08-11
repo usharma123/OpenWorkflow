@@ -6,6 +6,7 @@ import {
   ExternalLink,
   MessageSquare,
   Play,
+  RotateCcw,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { LatestRunResult, PendingApproval, RunStepSummary, WorkflowNodeType } from "../types";
@@ -21,6 +22,7 @@ interface RunTranscriptProps {
   approvalBusy: boolean;
   onApproval: (approved: boolean, note?: string) => void;
   onRun: () => void;
+  onRetry?: () => void;
   running: boolean;
 }
 
@@ -273,6 +275,7 @@ export function RunTranscript({
   approvalBusy,
   onApproval,
   onRun,
+  onRetry,
   running,
 }: RunTranscriptProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -346,9 +349,13 @@ export function RunTranscript({
             <strong>The run stopped</strong>
             <small>{result.error ?? "The workflow failed."}</small>
             <small>
-              Nothing after the failed step ran, so no message was shared. Fix the step above and run
-              again.
+              Successful steps are preserved. Retry resumes at the failed step and continues downstream.
             </small>
+            {onRetry && (
+              <button className="btn tx-retry" disabled={running} onClick={onRetry}>
+                <RotateCcw size={13} /> Retry from failed step
+              </button>
+            )}
           </span>
         </div>
       )}

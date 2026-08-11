@@ -22,7 +22,7 @@ export type MergedExecutionInput = {
   sources: Array<{ packetId: string; nodeId: string; port: string }>;
 };
 
-export type RunScopeMode = "full" | "single" | "through";
+export type RunScopeMode = "full" | "single" | "through" | "resume";
 
 export function nodeIdsForRunScope(
   nodes: ExecutableGraphNode[],
@@ -35,6 +35,22 @@ export function nodeIdsForRunScope(
     throw new Error("The step selected for this test run no longer exists.");
   }
   if (mode === "single") return new Set([scopeNodeId]);
+
+  if (mode === "resume") {
+    const outgoing = new Map<string, string[]>();
+    for (const edge of edges) {
+      outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+    }
+    const included = new Set([scopeNodeId]);
+    const pending = [...(outgoing.get(scopeNodeId) ?? [])];
+    while (pending.length) {
+      const nodeId = pending.pop()!;
+      if (included.has(nodeId)) continue;
+      included.add(nodeId);
+      pending.push(...(outgoing.get(nodeId) ?? []));
+    }
+    return included;
+  }
 
   const incoming = new Map<string, string[]>();
   for (const edge of edges) {

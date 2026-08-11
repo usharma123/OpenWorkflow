@@ -23,6 +23,7 @@ import {
   getRunRef,
   getWorkflowRef,
   listConnectionsRef,
+  retryRunRef,
   startRunRef,
   upsertWorkflowRef,
 } from "./lib/convexClient";
@@ -30,6 +31,7 @@ import { runDemo } from "./lib/demoRunner";
 import { mappingSourcesForNode } from "./lib/dataMapping";
 import { validateWorkflowConnection } from "./lib/workflowConnections";
 import { nodeIdsForRunScope, type RunScopeMode } from "../shared/executionGraph";
+import type { Id } from "../convex/_generated/dataModel";
 import type {
   LatestRunResult,
   PendingApproval,
@@ -58,6 +60,7 @@ function persistableNodes(nodes: WorkflowNode[]): WorkflowNode[] {
 }
 
 const DAYTONA_CHILD_TYPES = new Set<WorkflowNodeType>(["code", "shell", "git"]);
+type EditorRunMode = Exclude<RunScopeMode, "resume">;
 
 interface EditorState {
   name: string;
@@ -372,7 +375,68 @@ function useWorkflowEditorController() {
     patchEditor({ selectedNodeId: duplicate.id });
   };
 
-  const runWorkflow = async (runMode: RunScopeMode = "full", scopeNodeId?: string) => {
+  const observeBackendRun = async (
+    client: NonNullable<typeof convexClient>,
+    runId: Id<"workflowRuns">,
+  ) => new Promise<void>((resolve, reject) => {
+    const watch = client.watchQuery(getRunRef, { runId });
+    let unsubscribe = () => {};
+    unsubscribe = watch.onUpdate(() => {
+      try {
+        const run = watch.localQueryResult();
+        if (!run) return;
+        setLatestResult({
+          id: runId,
+          status: run.status,
+          output: run.output,
+          error: run.error,
+          steps: run.steps.map((step) => ({ id: step._id, ...step })),
+        });
+
+        const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
+        if (waiting) {
+          const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
+          patchEditor({ pendingApproval: {
+            backendRunId: runId,
+            nodeId: waiting.nodeId,
+            title: waiting.nodeLabel,
+            prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
+            input: waiting.input,
+          } });
+        } else patchEditor({ pendingApproval: undefined });
+
+        setNodes((current) =>
+          current.map((node) => {
+            const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
+            const status =
+              latest?.status === "completed"
+                ? "success"
+                : latest?.status === "failed"
+                  ? "error"
+                  : latest?.status === "waiting"
+                    ? "waiting"
+                    : latest
+                      ? "running"
+                      : "idle";
+            return node.data.status === status
+              ? node
+              : { ...node, data: { ...node.data, status } };
+          }),
+        );
+
+        if (run.status === "completed" || run.status === "failed") {
+          unsubscribe();
+          if (run.status === "failed") reject(new Error(run.error ?? "Workflow failed."));
+          else resolve();
+        }
+      } catch (error) {
+        unsubscribe();
+        reject(error);
+      }
+    });
+  });
+
+  const runWorkflow = async (runMode: EditorRunMode = "full", scopeNodeId?: string) => {
     if (running) return;
     patchEditor({
       running: true,
@@ -433,63 +497,7 @@ function useWorkflowEditorController() {
         });
         setLatestResult({ id: runId, status: "queued" });
 
-        await new Promise<void>((resolve, reject) => {
-          const watch = client.watchQuery(getRunRef, { runId });
-          let unsubscribe = () => {};
-          unsubscribe = watch.onUpdate(() => {
-            try {
-              const run = watch.localQueryResult();
-              if (!run) return;
-              setLatestResult({
-                id: runId,
-                status: run.status,
-                output: run.output,
-                error: run.error,
-                steps: run.steps.map((step) => ({ id: step._id, ...step })),
-              });
-
-              const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
-              if (waiting) {
-                const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
-                patchEditor({ pendingApproval: {
-                  backendRunId: runId,
-                  nodeId: waiting.nodeId,
-                  title: waiting.nodeLabel,
-                  prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
-                  input: waiting.input,
-                } });
-              } else patchEditor({ pendingApproval: undefined });
-
-              setNodes((current) =>
-                current.map((node) => {
-                  const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
-                  const status =
-                    latest?.status === "completed"
-                      ? "success"
-                      : latest?.status === "failed"
-                        ? "error"
-                        : latest?.status === "waiting"
-                          ? "waiting"
-                          : latest
-                            ? "running"
-                            : "idle";
-                  return node.data.status === status
-                    ? node
-                    : { ...node, data: { ...node.data, status } };
-                }),
-              );
-
-              if (run.status === "completed" || run.status === "failed") {
-                unsubscribe();
-                if (run.status === "failed") reject(new Error(run.error ?? "Workflow failed."));
-                else resolve();
-              }
-            } catch (error) {
-              unsubscribe();
-              reject(error);
-            }
-          });
-        });
+        await observeBackendRun(client, runId);
       } else {
         const demoRun = await runDemo(
           { ...initial, name, description, enabled, nodes, edges, updatedAt: Date.now() },
@@ -524,6 +532,27 @@ function useWorkflowEditorController() {
     } finally {
       patchEditor({ running: false, pendingApproval: undefined });
       demoApprovalResolver.current = undefined;
+    }
+  };
+
+  const retryFailedRun = async () => {
+    if (running || !convexClient || !latestResult?.id) return;
+    patchEditor({ running: true, panelMode: "run", pendingApproval: undefined });
+    setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
+    try {
+      const runId = await convexClient.mutation(retryRunRef, {
+        runId: latestResult.id as Id<"workflowRuns">,
+      });
+      setLatestResult({ id: runId, status: "queued" });
+      await observeBackendRun(convexClient, runId);
+    } catch (error) {
+      setLatestResult((current) => ({
+        ...current,
+        status: "failed",
+        error: error instanceof Error ? error.message : "Retry failed.",
+      }));
+    } finally {
+      patchEditor({ running: false, pendingApproval: undefined });
     }
   };
 
@@ -595,6 +624,7 @@ function useWorkflowEditorController() {
     addNode,
     restoreStarter,
     runWorkflow,
+    retryFailedRun,
     updateSelectedNode,
     deleteSelectedNode,
     duplicateSelectedNode,
@@ -648,6 +678,7 @@ function WorkflowEditorView({
   addNode,
   restoreStarter,
   runWorkflow,
+  retryFailedRun,
   updateSelectedNode,
   deleteSelectedNode,
   duplicateSelectedNode,
@@ -746,6 +777,7 @@ function WorkflowEditorView({
               approvalBusy={approvalBusy}
               onApproval={(approved, note) => void decideApproval(approved, note)}
               onRun={() => void runWorkflow()}
+              onRetry={() => void retryFailedRun()}
               running={running}
             />
           }
