@@ -3,6 +3,7 @@ import {
   inputPacketsForNode,
   inputValueForPackets,
   packetForNodeOutput,
+  nodeIdsForRunScope,
   terminalOutput,
   topologicalNodes,
   type ExecutionPacket,
@@ -11,6 +12,13 @@ import {
 const node = (id: string, nodeType = "transform") => ({ id, data: { nodeType } });
 
 describe("port-aware workflow execution", () => {
+  test("scopes a test run to one step or all of its ancestors", () => {
+    const nodes = [node("a"), node("b"), node("c"), node("other")];
+    const edges = [{ source: "a", target: "b" }, { source: "b", target: "c" }];
+    expect([...nodeIdsForRunScope(nodes, edges, "single", "c")]).toEqual(["c"]);
+    expect([...nodeIdsForRunScope(nodes, edges, "through", "c")].sort()).toEqual(["a", "b", "c"]);
+    expect(() => nodeIdsForRunScope(nodes, edges, "single", "missing")).toThrow("no longer exists");
+  });
   test("keeps sibling branches on the output of their common parent", () => {
     const edges = [
       { source: "root", target: "left" },

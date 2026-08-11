@@ -55,6 +55,8 @@ export default defineSchema({
       v.literal("failed"),
     ),
     trigger: v.string(),
+    runMode: v.optional(v.union(v.literal("full"), v.literal("single"), v.literal("through"))),
+    scopeNodeId: v.optional(v.string()),
     input: v.any(),
     output: v.optional(v.any()),
     error: v.optional(v.string()),

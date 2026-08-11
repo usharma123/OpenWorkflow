@@ -65,7 +65,7 @@ export function DataMapper({ node, sources, onChange }: DataMapperProps) {
               <summary>
                 <span>
                   <strong>{source.nodeLabel}</strong>
-                  <small>{source.nodeType}</small>
+                  <small>{source.pinned ? "Pinned sample" : source.nodeType}</small>
                 </span>
                 <small>{source.fields.length} fields</small>
               </summary>
@@ -98,7 +98,7 @@ export function DataMapper({ node, sources, onChange }: DataMapperProps) {
         </div>
       ) : (
         <div className="mapper-empty">
-          Run the workflow once, then return to this step to map its upstream output.
+          Run an upstream step or pin sample output, then return here to map its fields.
         </div>
       )}
 

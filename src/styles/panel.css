@@ -439,6 +439,25 @@
   min-width: 0;
 }
 
+.step-testing-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.step-testing-actions .btn {
+  justify-content: center;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+.step-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+}
+
 .inspector-actions {
   display: flex;
   gap: 8px;

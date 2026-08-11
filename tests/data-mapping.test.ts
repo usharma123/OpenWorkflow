@@ -36,6 +36,17 @@ describe("data mapping", () => {
     expect(mappingSourcesForNode("three", edges, steps).map((source) => source.nodeId)).toEqual(["one"]);
   });
 
+  test("prefers pinned upstream sample data", () => {
+    const pinnedNode = {
+      id: "one",
+      type: "workflow",
+      position: { x: 0, y: 0 },
+      data: { label: "Inbox", description: "", nodeType: "gmailTrigger", config: { pinnedOutput: { count: 9 } } },
+    } as const;
+    const sources = mappingSourcesForNode("three", edges, [], [pinnedNode as never]);
+    expect(sources[0]).toMatchObject({ nodeId: "one", pinned: true, output: { count: 9 } });
+  });
+
   test("builds and appends stable expressions", () => {
     const expression = mappingExpression("gmail-a1b2", "messages.0.subject");
     expect(expression).toBe("{{ steps.gmail-a1b2.messages.0.subject }}");

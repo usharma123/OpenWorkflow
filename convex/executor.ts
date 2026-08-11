@@ -9,6 +9,7 @@ import {
   inputPacketsForNode,
   inputValueForPackets,
   packetForNodeOutput,
+  nodeIdsForRunScope,
   terminalOutput,
   topologicalNodes,
   type ExecutionPacket,
@@ -392,13 +393,26 @@ export const executeWorkflow = workflow
       const allNodes = definition.nodes as WorkflowNode[];
       const nodes = allNodes.filter((node) => node.data.nodeType !== "daytonaSandbox");
       const edges = definition.edges as WorkflowEdge[];
-      const ordered = topologicalNodes(nodes, edges);
+      const activeNodeIds = nodeIdsForRunScope(nodes, edges, run.runMode ?? "full", run.scopeNodeId);
+      const ordered = topologicalNodes(nodes, edges).filter((node) => activeNodeIds.has(node.id));
       const outputs = new Map<string, ExecutionPacket>();
+
+      if ((run.runMode ?? "full") !== "full") {
+        for (const node of nodes) {
+          if (activeNodeIds.has(node.id)) continue;
+          if (Object.prototype.hasOwnProperty.call(node.data.config, "pinnedOutput")) {
+            outputs.set(node.id, packetForNodeOutput(node, node.data.config.pinnedOutput));
+          }
+        }
+      }
 
       for (const node of ordered) {
         const { label, nodeType, config } = node.data;
         const incoming = inputPacketsForNode(node.id, edges, outputs);
         if (incoming.hasIncomingEdges && incoming.packets.length === 0) {
+          if (run.runMode === "single") {
+            throw new Error(`Pin output on an upstream step before testing ${label} by itself.`);
+          }
           await step.runMutation(internal.executor.skipStep, { runId, node });
           continue;
         }
@@ -468,7 +482,9 @@ export const executeWorkflow = workflow
         activeStepRunId = undefined;
       }
 
-      const output = terminalOutput(nodes, edges, outputs);
+      const scopedNodes = nodes.filter((node) => activeNodeIds.has(node.id));
+      const scopedEdges = edges.filter((edge) => activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target));
+      const output = terminalOutput(scopedNodes, scopedEdges, outputs);
       if (sandboxIdsByBoundary.size) {
         try {
           await step.runAction(internal.daytonaExecution.cleanup, {

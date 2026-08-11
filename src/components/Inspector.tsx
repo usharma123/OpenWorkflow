@@ -1,8 +1,8 @@
-import { Copy, Trash2 } from "lucide-react";
+import { Copy, Pin, PinOff, Play, StepForward, Trash2 } from "lucide-react";
 import { catalogByType } from "../catalog";
 import type { ConnectionMetadata } from "../lib/convexClient";
 import type { MappingSource } from "../lib/dataMapping";
-import type { WorkflowNode } from "../types";
+import type { RunStepSummary, WorkflowNode } from "../types";
 import { DataMapper } from "./DataMapper";
 import { NodeMark } from "./icons";
 
@@ -14,6 +14,11 @@ interface InspectorProps {
   connections: ConnectionMetadata[];
   onOpenConnectors: () => void;
   mappingSources: MappingSource[];
+  latestStep?: RunStepSummary;
+  running: boolean;
+  onRunStep: (mode: "single" | "through") => void;
+  onPinOutput: (output: unknown) => void;
+  onUnpinOutput: () => void;
 }
 
 function Text({
@@ -426,6 +431,11 @@ export function Inspector({
   connections,
   onOpenConnectors,
   mappingSources,
+  latestStep,
+  running,
+  onRunStep,
+  onPinOutput,
+  onUnpinOutput,
 }: InspectorProps) {
   const item = catalogByType[node.data.nodeType];
   const config = node.data.config;
@@ -472,6 +482,33 @@ export function Inspector({
         sources={mappingSources}
         onChange={onChange}
       />
+
+      {type !== "daytonaSandbox" && (
+        <section className="inspector-section step-testing">
+          <div className="mapper-heading">
+            <span className="t-eyebrow">Test step</span>
+            {Object.prototype.hasOwnProperty.call(config, "pinnedOutput") && <span className="badge">Pinned</span>}
+          </div>
+          <p className="mapper-help">Run only this step with pinned inputs, or execute everything leading to it.</p>
+          <div className="step-testing-actions">
+            <button className="btn" disabled={running} onClick={() => onRunStep("single")}>
+              <Play size={13} /> Run this step
+            </button>
+            <button className="btn" disabled={running} onClick={() => onRunStep("through")}>
+              <StepForward size={13} /> Run through here
+            </button>
+          </div>
+          {Object.prototype.hasOwnProperty.call(config, "pinnedOutput") ? (
+            <button className="link-btn step-pin" type="button" onClick={onUnpinOutput}>
+              <PinOff size={12} /> Unpin sample output
+            </button>
+          ) : latestStep?.status === "completed" && latestStep.output !== undefined ? (
+            <button className="link-btn step-pin" type="button" onClick={() => onPinOutput(latestStep.output)}>
+              <Pin size={12} /> Pin latest output as sample data
+            </button>
+          ) : null}
+        </section>
+      )}
 
       {/*
         Live is the default and reads as unremarkable. Demo is a quiet opt-out

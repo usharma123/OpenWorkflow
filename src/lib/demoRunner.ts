@@ -3,9 +3,11 @@ import {
   inputPacketsForNode,
   inputValueForPackets,
   packetForNodeOutput,
+  nodeIdsForRunScope,
   terminalOutput,
   topologicalNodes,
   type ExecutionPacket,
+  type RunScopeMode,
 } from "../../shared/executionGraph";
 
 const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -40,6 +42,7 @@ export async function runDemo(
   onLog: (log: RunLog) => void,
   onNodeStatus: (nodeId: string, status: "running" | "success" | "error") => void,
   requestApproval: (request: PendingApproval) => Promise<{ approved: boolean; note?: string }>,
+  options: { runMode?: RunScopeMode; scopeNodeId?: string } = {},
 ): Promise<WorkflowRun> {
   const run: WorkflowRun = { id: crypto.randomUUID(), status: "running", startedAt: Date.now(), logs: [] };
   const log = (entry: Omit<RunLog, "id" | "timestamp">) => {
@@ -49,14 +52,27 @@ export async function runDemo(
   const rootValue: unknown = { startedBy: "Editor user", date: new Date().toLocaleDateString() };
   const executableNodes = workflow.nodes.filter((node) => node.data.nodeType !== "daytonaSandbox");
   const outputs = new Map<string, ExecutionPacket>();
+  const runMode = options.runMode ?? "full";
+  const activeNodeIds = nodeIdsForRunScope(executableNodes, workflow.edges, runMode, options.scopeNodeId);
+  if (runMode !== "full") {
+    for (const node of executableNodes) {
+      if (activeNodeIds.has(node.id)) continue;
+      if (Object.prototype.hasOwnProperty.call(node.data.config, "pinnedOutput")) {
+        outputs.set(node.id, packetForNodeOutput(node, node.data.config.pinnedOutput));
+      }
+    }
+  }
   let activeNodeId: string | undefined;
   log({ level: "info", message: "Safe demo started", explanation: "Sample business data is used; no mailbox or Slack channel will be touched." });
 
   try {
-    for (const node of topologicalNodes(executableNodes, workflow.edges)) {
+    for (const node of topologicalNodes(executableNodes, workflow.edges).filter((candidate) => activeNodeIds.has(candidate.id))) {
       const { label, description, nodeType, config } = node.data;
       const incoming = inputPacketsForNode(node.id, workflow.edges, outputs);
-      if (incoming.hasIncomingEdges && incoming.packets.length === 0) continue;
+      if (incoming.hasIncomingEdges && incoming.packets.length === 0) {
+        if (runMode === "single") throw new Error(`Pin output on an upstream step before testing ${label} by itself.`);
+        continue;
+      }
       const value = inputValueForPackets(incoming.packets, rootValue);
       const stepOutputs = Object.fromEntries(
         [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
@@ -109,7 +125,9 @@ export async function runDemo(
       onNodeStatus(node.id, "success");
       activeNodeId = undefined;
     }
-    run.status = "completed"; run.completedAt = Date.now(); run.output = terminalOutput(executableNodes, workflow.edges, outputs);
+    const scopedNodes = executableNodes.filter((node) => activeNodeIds.has(node.id));
+    const scopedEdges = workflow.edges.filter((edge) => activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target));
+    run.status = "completed"; run.completedAt = Date.now(); run.output = terminalOutput(scopedNodes, scopedEdges, outputs);
     log({ level: "success", message: "Workflow completed", explanation: "Every step finished and the approval was recorded." });
     return run;
   } catch (error) {

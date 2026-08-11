@@ -32,6 +32,7 @@ export async function createPinnedRun(
   definition: Doc<"workflows">,
   trigger: string,
   input: unknown,
+  options: { runMode?: "full" | "single" | "through"; scopeNodeId?: string } = {},
 ) {
   if (!definition.ownerKey || !definition.ownerUserId) throw new Error("Workflow ownership is invalid.");
   const version = await ensureWorkflowVersion(ctx, definition);
@@ -43,6 +44,8 @@ export async function createPinnedRun(
     ownerUserId: definition.ownerUserId,
     status: "queued",
     trigger,
+    runMode: options.runMode ?? "full",
+    scopeNodeId: options.scopeNodeId,
     input,
     startedAt: Date.now(),
   });
@@ -81,7 +84,13 @@ export const get = query({
 });
 
 export const startRun = mutation({
-  args: { externalWorkflowId: v.string(), input: v.any(), trigger: v.optional(v.string()) },
+  args: {
+    externalWorkflowId: v.string(),
+    input: v.any(),
+    trigger: v.optional(v.string()),
+    runMode: v.optional(v.union(v.literal("full"), v.literal("single"), v.literal("through"))),
+    scopeNodeId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
     const definition = await ctx.db
@@ -89,11 +98,21 @@ export const startRun = mutation({
       .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", args.externalWorkflowId))
       .unique();
     if (!definition) throw new Error("Save the workflow before running it.");
+    const runMode = args.runMode ?? "full";
+    if (runMode !== "full") {
+      const scopedNode = (definition.nodes as Array<{ id?: string; data?: { nodeType?: string } }>).find(
+        (node) => node.id === args.scopeNodeId,
+      );
+      if (!scopedNode || scopedNode.data?.nodeType === "daytonaSandbox") {
+        throw new Error("Choose an executable step for this test run.");
+      }
+    }
     return createPinnedRun(
       ctx,
       { ...definition, ownerUserId: principal.userId },
       args.trigger ?? "manual",
       args.input,
+      { runMode, scopeNodeId: args.scopeNodeId },
     );
   },
 });

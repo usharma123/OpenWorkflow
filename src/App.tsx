@@ -29,6 +29,7 @@ import {
 import { runDemo } from "./lib/demoRunner";
 import { mappingSourcesForNode } from "./lib/dataMapping";
 import { validateWorkflowConnection } from "./lib/workflowConnections";
+import { nodeIdsForRunScope, type RunScopeMode } from "../shared/executionGraph";
 import type {
   LatestRunResult,
   PendingApproval,
@@ -134,9 +135,12 @@ function useWorkflowEditorController() {
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const mappingSources = useMemo(
-    () => selectedNodeId ? mappingSourcesForNode(selectedNodeId, edges, latestResult?.steps) : [],
-    [edges, latestResult?.steps, selectedNodeId],
+    () => selectedNodeId ? mappingSourcesForNode(selectedNodeId, edges, latestResult?.steps, nodes) : [],
+    [edges, latestResult?.steps, nodes, selectedNodeId],
   );
+  const latestSelectedStep = selectedNodeId
+    ? [...(latestResult?.steps ?? [])].reverse().find((step) => step.nodeId === selectedNodeId)
+    : undefined;
 
   useEffect(() => {
     if (!convexClient || hydratedOnce.current) return;
@@ -368,7 +372,7 @@ function useWorkflowEditorController() {
     patchEditor({ selectedNodeId: duplicate.id });
   };
 
-  const runWorkflow = async () => {
+  const runWorkflow = async (runMode: RunScopeMode = "full", scopeNodeId?: string) => {
     if (running) return;
     patchEditor({
       running: true,
@@ -385,7 +389,9 @@ function useWorkflowEditorController() {
         : connections;
 
       // Fail before doing any work if a live step has no usable account.
+      const activeNodeIds = nodeIdsForRunScope(nodes, edges, runMode, scopeNodeId);
       const unready = nodes.find((node) => {
+        if (!activeNodeIds.has(node.id)) return false;
         const provider =
           node.data.nodeType === "slack"
             ? "slack"
@@ -422,6 +428,8 @@ function useWorkflowEditorController() {
           externalWorkflowId: initial.id,
           input: { requestedBy: "Editor user", date: new Date().toLocaleDateString() },
           trigger: "manual",
+          runMode,
+          ...(scopeNodeId ? { scopeNodeId } : {}),
         });
         setLatestResult({ id: runId, status: "queued" });
 
@@ -497,6 +505,7 @@ function useWorkflowEditorController() {
               demoApprovalResolver.current = resolve;
               patchEditor({ pendingApproval: request });
             }),
+          { runMode, scopeNodeId },
         );
         setLatestResult({
           id: demoRun.id,
@@ -579,6 +588,7 @@ function useWorkflowEditorController() {
     selectedNode,
     connections,
     mappingSources,
+    latestSelectedStep,
     latestResult,
     pendingApproval,
     approvalBusy,
@@ -589,6 +599,23 @@ function useWorkflowEditorController() {
     deleteSelectedNode,
     duplicateSelectedNode,
     decideApproval,
+    pinSelectedOutput: (output: unknown) => {
+      if (!selectedNode) return;
+      updateSelectedNode({
+        ...selectedNode,
+        data: {
+          ...selectedNode.data,
+          config: { ...selectedNode.data.config, pinnedOutput: output, pinnedAt: Date.now() },
+        },
+      });
+      setNotice({ message: `${selectedNode.data.label} output pinned for testing`, tone: "info" });
+    },
+    unpinSelectedOutput: () => {
+      if (!selectedNode) return;
+      const { pinnedOutput: _pinnedOutput, pinnedAt: _pinnedAt, ...config } = selectedNode.data.config;
+      updateSelectedNode({ ...selectedNode, data: { ...selectedNode.data, config } });
+      setNotice({ message: `${selectedNode.data.label} sample output unpinned`, tone: "info" });
+    },
     openConnectors: () => navigate("/connections"),
     setName: (name: string) => patchEditor({ name }),
     setEnabled: (enabled: boolean) => patchEditor({ enabled }),
@@ -614,6 +641,7 @@ function WorkflowEditorView({
   selectedNode,
   connections,
   mappingSources,
+  latestSelectedStep,
   latestResult,
   pendingApproval,
   approvalBusy,
@@ -624,6 +652,8 @@ function WorkflowEditorView({
   deleteSelectedNode,
   duplicateSelectedNode,
   decideApproval,
+  pinSelectedOutput,
+  unpinSelectedOutput,
   openConnectors,
   setName,
   setEnabled,
@@ -696,6 +726,11 @@ function WorkflowEditorView({
                 connections={connections}
                 onOpenConnectors={openConnectors}
                 mappingSources={mappingSources}
+                latestStep={latestSelectedStep}
+                running={running}
+                onRunStep={(mode) => void runWorkflow(mode, selectedNode.id)}
+                onPinOutput={pinSelectedOutput}
+                onUnpinOutput={unpinSelectedOutput}
               />
             ) : (
               <div className="tx-empty">

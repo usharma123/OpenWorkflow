@@ -1,4 +1,4 @@
-import type { RunStepSummary, WorkflowEdge, WorkflowNodeType } from "../types";
+import type { RunStepSummary, WorkflowEdge, WorkflowNode, WorkflowNodeType } from "../types";
 
 export interface MappingField {
   path: string;
@@ -12,6 +12,7 @@ export interface MappingSource {
   nodeType: string;
   output: unknown;
   fields: MappingField[];
+  pinned?: boolean;
 }
 
 export interface MappingTarget {
@@ -104,6 +105,7 @@ export function mappingSourcesForNode(
   nodeId: string,
   edges: WorkflowEdge[],
   steps: RunStepSummary[] = [],
+  nodes: WorkflowNode[] = [],
 ): MappingSource[] {
   const upstream = upstreamNodeIds(nodeId, edges);
   const latestByNode = new Map<string, RunStepSummary>();
@@ -113,15 +115,32 @@ export function mappingSourcesForNode(
     }
   }
 
-  return [...latestByNode.values()]
-    .sort((left, right) => left.startedAt - right.startedAt)
-    .map((step) => ({
+  const nodeOrder = new Map(nodes.map((node, index) => [node.id, index]));
+  const sources = new Map<string, MappingSource>();
+  for (const step of latestByNode.values()) {
+    sources.set(step.nodeId, {
       nodeId: step.nodeId,
       nodeLabel: step.nodeLabel,
       nodeType: step.nodeType,
       output: step.output,
       fields: flattenMappingFields(step.output),
-    }));
+    });
+  }
+  for (const node of nodes) {
+    if (!upstream.has(node.id) || !Object.prototype.hasOwnProperty.call(node.data.config, "pinnedOutput")) continue;
+    const output = node.data.config.pinnedOutput;
+    sources.set(node.id, {
+      nodeId: node.id,
+      nodeLabel: node.data.label,
+      nodeType: node.data.nodeType,
+      output,
+      fields: flattenMappingFields(output),
+      pinned: true,
+    });
+  }
+  return [...sources.values()].sort(
+    (left, right) => (nodeOrder.get(left.nodeId) ?? 0) - (nodeOrder.get(right.nodeId) ?? 0),
+  );
 }
 
 export function mappingExpression(nodeId: string, path: string): string {

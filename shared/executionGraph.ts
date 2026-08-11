@@ -22,6 +22,35 @@ export type MergedExecutionInput = {
   sources: Array<{ packetId: string; nodeId: string; port: string }>;
 };
 
+export type RunScopeMode = "full" | "single" | "through";
+
+export function nodeIdsForRunScope(
+  nodes: ExecutableGraphNode[],
+  edges: ExecutableGraphEdge[],
+  mode: RunScopeMode,
+  scopeNodeId?: string,
+): Set<string> {
+  if (mode === "full") return new Set(nodes.map((node) => node.id));
+  if (!scopeNodeId || !nodes.some((node) => node.id === scopeNodeId)) {
+    throw new Error("The step selected for this test run no longer exists.");
+  }
+  if (mode === "single") return new Set([scopeNodeId]);
+
+  const incoming = new Map<string, string[]>();
+  for (const edge of edges) {
+    incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge.source]);
+  }
+  const included = new Set([scopeNodeId]);
+  const pending = [...(incoming.get(scopeNodeId) ?? [])];
+  while (pending.length) {
+    const nodeId = pending.pop()!;
+    if (included.has(nodeId)) continue;
+    included.add(nodeId);
+    pending.push(...(incoming.get(nodeId) ?? []));
+  }
+  return included;
+}
+
 export function topologicalNodes<NodeType extends ExecutableGraphNode>(
   nodes: NodeType[],
   edges: ExecutableGraphEdge[],
