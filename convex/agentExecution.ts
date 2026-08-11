@@ -100,18 +100,50 @@ async function searchWeb(query: string, numResults: number) {
   return { query, results, count: results.length, source: "exa" };
 }
 
+const MAX_FETCH_REDIRECTS = 5;
+
+// Browser-like headers: bot-protection layers (Cloudflare et al.) block custom
+// user agents coming from datacenter IPs, which is where Convex actions run.
+const FETCH_URL_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 OpenWorkflowAgent/1.0",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+} as const;
+
 async function fetchPublicUrl(url: string, maxChars: number) {
-  assertPublicHttpsUrl(url);
-  const response = await fetch(url, {
-    redirect: "error",
-    headers: { "User-Agent": "OpenWorkflowAgent/1.0" },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`Fetch failed (${response.status}) for ${url}`);
+  // Redirects are followed manually so every hop is re-validated against
+  // private/local hosts (SSRF guard) instead of blindly trusting Location.
+  let current = assertPublicHttpsUrl(url);
+  let response: Response;
+  let hops = 0;
+  for (;;) {
+    try {
+      response = await fetch(current, {
+        redirect: "manual",
+        headers: FETCH_URL_HEADERS,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      const reason = error instanceof Error && error.name === "TimeoutError" ? "timed out after 30s" : "network error";
+      throw new Error(`Fetch failed (${reason}) for ${current.toString()}`);
+    }
+    if (response.status < 300 || response.status >= 400) break;
+    const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => {});
+    if (!location) {
+      throw new Error(`Fetch failed (${response.status} redirect without a Location header) for ${current.toString()}`);
+    }
+    if (++hops > MAX_FETCH_REDIRECTS) {
+      throw new Error(`Fetch failed (more than ${MAX_FETCH_REDIRECTS} redirects) for ${url}`);
+    }
+    current = assertPublicHttpsUrl(new URL(location, current).toString());
+  }
+  if (!response.ok) throw new Error(`Fetch failed (${response.status}) for ${current.toString()}`);
   const contentType = response.headers.get("content-type") ?? "";
   const raw = await response.text();
   const text = contentType.includes("html") ? htmlToText(raw) : raw;
-  return { url, contentType, text: text.slice(0, maxChars) };
+  return { url: current.toString(), contentType, text: text.slice(0, maxChars) };
 }
 
 async function openRouterChat(
