@@ -7,6 +7,63 @@ import type { Doc } from "./_generated/dataModel";
 import { requirePrincipal } from "./auth";
 import { workflowConcurrencyLimit } from "../shared/reliability";
 import { MAX_PLAN_STEPS } from "../shared/agentTools";
+import { topologicalBatches } from "../shared/executionGraph";
+import { compactAgentOutput } from "../shared/executionPayload";
+
+const workflowResultValidator = v.union(
+  v.object({ kind: v.literal("success"), returnValue: v.any() }),
+  v.object({ kind: v.literal("failed"), error: v.string() }),
+  v.object({ kind: v.literal("canceled") }),
+);
+
+function workflowFailureMessage(error: string): string {
+  return error.match(/Function arguments for function ([^\n]+)/)?.[0]
+    ?? error.match(/Uncaught Error:\s*([^\n]+)/)?.[1]
+    ?? error.slice(0, 1_000);
+}
+
+async function markRunFailed(
+  ctx: MutationCtx,
+  runId: import("./_generated/dataModel").Id<"workflowRuns">,
+  error: string,
+) {
+  const run = await ctx.db.get(runId);
+  if (!run || run.status === "completed" || run.status === "failed") return;
+  const completedAt = Date.now();
+  await ctx.db.patch(runId, { status: "failed", error: error.slice(0, 1_000), completedAt });
+  const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
+  for (const step of steps) {
+    if (step.status !== "running" && step.status !== "waiting") continue;
+    await ctx.db.patch(step._id, { status: "failed", error: error.slice(0, 1_000), completedAt });
+  }
+  const agentTasks = await ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
+  for (const task of agentTasks) {
+    if (task.status !== "queued" && task.status !== "running") continue;
+    await ctx.db.patch(task._id, { status: "failed", error: "Parent workflow stopped.", completedAt });
+  }
+}
+
+/** Mirrors component-level terminal failures into the application run record. */
+export const handleWorkflowComplete = internalMutation({
+  args: {
+    workflowId: v.string(),
+    context: v.object({ runId: v.id("workflowRuns") }),
+    result: workflowResultValidator,
+  },
+  handler: async (ctx, { context, result }) => {
+    if (result.kind === "failed") {
+      await markRunFailed(ctx, context.runId, workflowFailureMessage(result.error));
+    } else if (result.kind === "canceled") {
+      await markRunFailed(ctx, context.runId, "Workflow execution was canceled.");
+    }
+  },
+});
+
+/** Operational repair for workflows created before the completion hook existed. */
+export const markStalledRunFailed = internalMutation({
+  args: { runId: v.id("workflowRuns"), error: v.string() },
+  handler: async (ctx, { runId, error }) => markRunFailed(ctx, runId, error),
+});
 
 function runtimeAgentSummary(task: Doc<"agentTasks">, detailed = true) {
   const base = {
@@ -117,7 +174,10 @@ export async function createPinnedRun(
   if (idempotencyKey) {
     await ctx.db.insert("runClaims", { workflowId: definition._id, idempotencyKey, runId, createdAt: Date.now() });
   }
-  const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId });
+  const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId }, {
+    onComplete: internal.runs.handleWorkflowComplete,
+    context: { runId },
+  });
   await ctx.db.patch(runId, { workflowEngineId });
   return runId;
 }
@@ -238,14 +298,30 @@ export const retry = mutation({
     const definition = await ctx.db.get(previous.workflowId);
     if (!definition || definition.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
     const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
-    const failedStep = [...steps].reverse().find((step) => step.status === "failed");
-    if (!failedStep) throw new Error("The failed step could not be identified.");
     const version = previous.workflowVersionId ? await ctx.db.get(previous.workflowVersionId) : await ensureWorkflowVersion(ctx, definition);
     if (!version || version.workflowId !== definition._id) throw new Error("The workflow version for this run is unavailable.");
+    const failedStep = [...steps].reverse().find((step) => step.status === "failed");
+    const completedNodeIds = new Set(steps.filter((step) => step.status === "completed").map((step) => step.nodeId));
+    const pendingNode = topologicalBatches(
+      version.nodes as Array<{ id: string; data: { nodeType: string } }>,
+      version.edges as Array<{ source: string; target: string; sourceHandle?: string | null }>,
+    ).flat().find((node) => !completedNodeIds.has(node.id));
+    const resumeNodeId = failedStep?.nodeId ?? pendingNode?.id;
+    const resumeNodeLabel = failedStep?.nodeLabel
+      ?? (version.nodes as Array<{ id: string; data: { label?: string } }>).find((node) => node.id === resumeNodeId)?.data.label
+      ?? "next incomplete step";
+    if (!resumeNodeId) throw new Error("The failed step could not be identified.");
     const seedOutputEntries: Array<[string, unknown]> = [];
+    const versionNodesById = new Map(
+      (version.nodes as Array<{ id: string; data: { nodeType: string } }>).map((node) => [node.id, node]),
+    );
     for (const step of steps) {
       if (step.status === "completed" && step.output !== undefined) {
-        seedOutputEntries.push([step.nodeId, step.output]);
+        const node = versionNodesById.get(step.nodeId);
+        seedOutputEntries.push([
+          step.nodeId,
+          node?.data.nodeType === "ai" ? compactAgentOutput(undefined, step.output) : step.output,
+        ]);
       }
     }
     const seedOutputs = Object.fromEntries(seedOutputEntries);
@@ -258,13 +334,16 @@ export const retry = mutation({
       status: "queued",
       trigger: "retry",
       runMode: "resume",
-      scopeNodeId: failedStep.nodeId,
+      scopeNodeId: resumeNodeId,
       retryOfRunId: runId,
       seedOutputs,
       input: previous.input,
       startedAt: Date.now(),
     });
-    const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId: retryRunId });
+    const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId: retryRunId }, {
+      onComplete: internal.runs.handleWorkflowComplete,
+      context: { runId: retryRunId },
+    });
     await ctx.db.patch(retryRunId, { workflowEngineId });
     await ctx.db.insert("auditLogs", {
       ownerKey: principal.ownerKey,
@@ -273,7 +352,7 @@ export const retry = mutation({
       event: "run.retry",
       outcome: "started",
       actor: principal.userId,
-      detail: `Retry of ${runId} from ${failedStep.nodeLabel}`,
+      detail: `Retry of ${runId} from ${resumeNodeLabel}`,
       createdAt: Date.now(),
     });
     return retryRunId;

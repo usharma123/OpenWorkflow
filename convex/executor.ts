@@ -19,6 +19,7 @@ import {
   type ExecutionPacket,
 } from "../shared/executionGraph";
 import { stepRetryPolicy } from "../shared/reliability";
+import { compactAgentOutput, referencedStepIds } from "../shared/executionPayload";
 import { clampSearchResultCount } from "../shared/webSearch";
 import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from "./openrouterStream";
 import { applyApprovalDecision } from "./policies";
@@ -59,6 +60,22 @@ const nonIdempotentWriteNodeTypes = new Set([
 
 const daytonaNodeTypes = new Set(["code", "shell", "git"]);
 const MAX_PARALLEL_NODES_PER_WAVE = 4;
+
+function compactNodeOutput(node: WorkflowNode, value: unknown): unknown {
+  return node.data.nodeType === "ai" && agentUsesCompute(node.data.config)
+    ? compactAgentOutput(undefined, value)
+    : value;
+}
+
+function referencedOutputsForNode(
+  node: WorkflowNode,
+  outputs: ReadonlyMap<string, ExecutionPacket>,
+): Record<string, unknown> {
+  return Object.fromEntries(referencedStepIds(node.data.config).flatMap((nodeId) => {
+    const packet = outputs.get(nodeId);
+    return packet ? [[nodeId, packet.value] as const] : [];
+  }));
+}
 
 function runRecordValue(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -539,10 +556,7 @@ export const executeNode = internalAction({
           timeoutSeconds: Math.min(900, Math.max(30, Math.trunc(Number(config.timeoutSeconds ?? 300)))),
           stepRunId,
         });
-        return {
-          ...(input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}),
-          ...result,
-        };
+        return compactAgentOutput(input, result);
       }
 
       // Lightweight completion without sandbox compute (optional OpenRouter web search).
@@ -613,12 +627,11 @@ export const executeNode = internalAction({
       if (buffer.trim()) streamState = applyOpenRouterEvent(streamState, buffer);
       await patchPartialOutput(true);
 
-      return {
-        ...(input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}),
+      return compactAgentOutput(input, {
         content: streamState.content,
         citations: streamState.annotations,
         usage: streamState.usage,
-      };
+      });
     }
 
     throw new Error(`Unsupported workflow block: ${nodeType}`);
@@ -648,7 +661,9 @@ export const executeWorkflow = workflow
       if (run.seedOutputs && typeof run.seedOutputs === "object" && !Array.isArray(run.seedOutputs)) {
         for (const [nodeId, output] of Object.entries(run.seedOutputs as Record<string, unknown>)) {
           const node = nodesById.get(nodeId);
-          if (node && !activeNodeIds.has(nodeId)) outputs.set(nodeId, packetForNodeOutput(node, output));
+          if (node && !activeNodeIds.has(nodeId)) {
+            outputs.set(nodeId, packetForNodeOutput(node, compactNodeOutput(node, output)));
+          }
         }
       }
 
@@ -721,9 +736,7 @@ export const executeWorkflow = workflow
           } else if (nodeType === "ai" && agentUsesCompute(config) && config.planFirst === true) {
             // Plan-first agent: Luna proposes a plan, the run pauses for review,
             // then the approved (possibly edited) plan is executed.
-            const stepOutputs = Object.fromEntries(
-              [...waveOutputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
-            );
+            const stepOutputs = referencedOutputsForNode(node, waveOutputs);
             const model = String(config.model ?? "openai/gpt-5.6-luna");
             const systemPrompt = String(config.systemPrompt ?? "").trim() || defaultComputeSystemPrompt();
             const userPrompt = renderTemplate(String(config.prompt ?? "{{input}}"), value, stepOutputs);
@@ -769,17 +782,10 @@ export const executeWorkflow = workflow
               stepRunId,
               plan: approvedSteps,
             });
-            const output = {
-              ...(value && typeof value === "object" && !Array.isArray(value)
-                ? (value as Record<string, unknown>)
-                : {}),
-              ...(result as Record<string, unknown>),
-            };
+            const output = compactAgentOutput(value, result);
             outputs.set(node.id, packetForNodeOutput(node, output));
           } else {
-            const stepOutputs = Object.fromEntries(
-              [...waveOutputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
-            );
+            const stepOutputs = referencedOutputsForNode(node, waveOutputs);
             const isNonIdempotentLiveWrite = nonIdempotentWriteNodeTypes.has(nodeType);
             const isLongRunningAgent = nodeType === "ai" && agentUsesCompute(config);
             const { retryAttempts, retryBackoffMs } = stepRetryPolicy(config);
