@@ -108,7 +108,7 @@ export function SetupScreen() {
             <span />
           ) : (
             <button className="setup-skip" onClick={finish}>
-              {googleAccount ? "Skip Slack for now" : "Use demo mode for now"}
+              {googleAccount ? "Skip Slack for now" : "Continue without Google"}
             </button>
           )}
           <button className="btn btn-primary btn-lg" onClick={finish}>

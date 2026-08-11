@@ -6,7 +6,7 @@ import { WorkflowMark } from "../components/WorkflowMark";
 /*
  * One method, one button. When Clerk's Google connection is configured with
  * the Workspace scopes, the sign-in consent also supplies the connector grant.
- * Setup provides a separate authorization fallback when it does not.
+ * Setup provides a dedicated Workspace authorization flow when it does not.
  */
 export function SignInScreen() {
   const { signIn } = useSignIn();

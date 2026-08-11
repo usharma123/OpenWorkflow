@@ -23,7 +23,26 @@ export interface MappingTarget {
 
 const targetsByType: Partial<Record<WorkflowNodeType, MappingTarget[]>> = {
   ai: [{ key: "prompt", label: "Instructions", multiline: true }],
+  webSearch: [{ key: "query", label: "Search query", multiline: false }],
   googleDoc: [{ key: "title", label: "Document title", multiline: false }],
+  gmailSend: [
+    { key: "to", label: "To", multiline: false },
+    { key: "subject", label: "Subject", multiline: false },
+    { key: "body", label: "Body", multiline: true },
+  ],
+  calendarEvent: [
+    { key: "title", label: "Event title", multiline: false },
+    { key: "description", label: "Event description", multiline: true },
+    { key: "startIso", label: "Start time", multiline: false },
+  ],
+  sheetsAppend: [
+    { key: "spreadsheetId", label: "Spreadsheet ID", multiline: false },
+    { key: "values", label: "Row values", multiline: true },
+  ],
+  driveUpload: [
+    { key: "fileName", label: "File name", multiline: false },
+    { key: "content", label: "File content", multiline: true },
+  ],
   slack: [{ key: "message", label: "Message", multiline: true }],
   http: [
     { key: "url", label: "HTTPS URL", multiline: false },

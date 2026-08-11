@@ -10,7 +10,12 @@ export type WorkflowNodeType =
   | "driveTrigger"
   | "sheetsTrigger"
   | "ai"
+  | "webSearch"
   | "googleDoc"
+  | "gmailSend"
+  | "calendarEvent"
+  | "sheetsAppend"
+  | "driveUpload"
   | "slack"
   | "http"
   | "condition"
@@ -25,7 +30,7 @@ export type WorkflowNodeType =
   | "git"
   | "output";
 
-export type NodeCategory = "Start" | "Think" | "Compute" | "Review" | "Deliver" | "Advanced";
+export type NodeCategory = "Triggers" | "AI" | "Apps" | "Logic" | "Compute";
 
 export interface WorkflowNodeData extends Record<string, unknown> {
   label: string;
@@ -59,6 +64,19 @@ export interface RunLog {
   explanation?: string;
 }
 
+export type RunPlanStepStatus = "pending" | "active" | "done" | "skipped";
+
+export interface RunPlanStep {
+  title: string;
+  status: RunPlanStepStatus;
+}
+
+export interface RunStepPlan {
+  steps: RunPlanStep[];
+  status: "proposed" | "approved" | "rejected";
+  note?: string;
+}
+
 export interface RunStepSummary {
   id: string;
   nodeId: string;
@@ -70,6 +88,7 @@ export interface RunStepSummary {
   partialOutput?: string;
   output?: unknown;
   error?: string;
+  plan?: RunStepPlan;
 }
 
 export interface PendingApproval {
@@ -79,6 +98,13 @@ export interface PendingApproval {
   title: string;
   prompt: string;
   input?: unknown;
+}
+
+export interface PendingPlanReview {
+  backendRunId?: import("../convex/_generated/dataModel").Id<"workflowRuns">;
+  nodeId: string;
+  title: string;
+  steps: string[];
 }
 
 export interface WorkflowRun {
@@ -108,4 +134,6 @@ export interface NodeCatalogItem {
   outcome: string;
   setup?: "none" | "connection";
   runtime?: "daytona";
+  /** Hide from the primary palette; still executable for legacy graphs. */
+  hidden?: boolean;
 }

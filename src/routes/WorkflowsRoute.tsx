@@ -5,6 +5,7 @@ import { Link, useNavigate } from "react-router-dom";
 import type { Id } from "../../convex/_generated/dataModel";
 import { STARTER_WORKFLOW } from "../catalog";
 import { WorkflowMark } from "../components/WorkflowMark";
+import { bindDefaultConnections } from "../lib/connectionBinding";
 import { useConnections } from "../lib/connections";
 import {
   duplicateWorkflowRef,
@@ -25,7 +26,7 @@ function formatWhen(timestamp: number): string {
 
 export function WorkflowsRoute() {
   const navigate = useNavigate();
-  const { setNotice } = useConnections();
+  const { connections, setNotice } = useConnections();
   const workflows = useQuery(listWorkflowsRef, {});
   const upsertWorkflow = useMutation(upsertWorkflowRef);
   const renameWorkflow = useMutation(renameWorkflowRef);
@@ -45,7 +46,7 @@ export function WorkflowsRoute() {
         description: STARTER_WORKFLOW.description,
         enabled: false,
         maxConcurrentRuns: 3,
-        nodes: structuredClone(STARTER_WORKFLOW.nodes),
+        nodes: bindDefaultConnections(structuredClone(STARTER_WORKFLOW.nodes), connections),
         edges: structuredClone(STARTER_WORKFLOW.edges),
         updatedAt: Date.now(),
       });

@@ -11,6 +11,7 @@ import { Check, History, Loader2, Play, RotateCcw, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, type SetStateAction } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { catalogByType, STARTER_WORKFLOW } from "./catalog";
+import { BuildChat } from "./components/BuildChat";
 import { Inspector } from "./components/Inspector";
 import { NodePalette } from "./components/NodePalette";
 import { RunTranscript } from "./components/RunTranscript";
@@ -20,17 +21,21 @@ import { useConnections } from "./lib/connections";
 import {
   approveRunRef,
   convexClient,
+  decidePlanRef,
   getRunRef,
   getWorkflowRef,
   listWorkflowVersionsRef,
   listConnectionsRef,
+  markBuildChatAppliedRef,
   retryRunRef,
   rollbackWorkflowRef,
   startRunRef,
   publishWorkflowRef,
   upsertWorkflowRef,
+  type BuildChatMessage,
 } from "./lib/convexClient";
-import { runDemo } from "./lib/demoRunner";
+import { materializeProposal } from "./lib/buildProposal";
+import { bindDefaultConnections, connectorProviderForNode } from "./lib/connectionBinding";
 import { mappingSourcesForNode } from "./lib/dataMapping";
 import { validateWorkflowConnection } from "./lib/workflowConnections";
 import { nodeIdsForRunScope, type RunScopeMode } from "../shared/executionGraph";
@@ -38,6 +43,7 @@ import type { Id } from "../convex/_generated/dataModel";
 import type {
   LatestRunResult,
   PendingApproval,
+  PendingPlanReview,
   WorkflowNode,
   WorkflowNodeType,
 } from "./types";
@@ -76,6 +82,8 @@ interface EditorState {
   latestResult?: LatestRunResult;
   pendingApproval?: PendingApproval;
   approvalBusy: boolean;
+  pendingPlanReview?: PendingPlanReview;
+  planBusy: boolean;
   backendLoaded: boolean;
   panelMode: PanelMode;
   versions: Array<{ _id: Id<"workflowVersions">; version: number; createdAt: number }>;
@@ -116,6 +124,7 @@ function useWorkflowEditorController() {
     saved: true,
     running: false,
     approvalBusy: false,
+    planBusy: false,
     backendLoaded: false,
     panelMode: "run",
     versions: [],
@@ -133,6 +142,8 @@ function useWorkflowEditorController() {
     latestResult,
     pendingApproval,
     approvalBusy,
+    pendingPlanReview,
+    planBusy,
     backendLoaded,
     panelMode,
     versions,
@@ -151,9 +162,6 @@ function useWorkflowEditorController() {
   const saveTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
   const skipInitialSave = useRef(true);
-  const demoApprovalResolver = useRef<((decision: { approved: boolean; note?: string }) => void) | undefined>(
-    undefined,
-  );
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const mappingSources = useMemo(
@@ -205,6 +213,11 @@ function useWorkflowEditorController() {
         }),
       )
   }, [initial.id, navigate, patchEditor, refreshVersions, setEdges, setNodes, setNotice]);
+
+  useEffect(() => {
+    if (!backendLoaded) return;
+    setNodes((current) => bindDefaultConnections(current, connections));
+  }, [backendLoaded, connections, setNodes]);
 
   useEffect(() => {
     if (!backendLoaded) return;
@@ -394,10 +407,11 @@ function useWorkflowEditorController() {
           config: structuredClone(item.defaultConfig),
         },
       };
-      setNodes((current) => [...current, node]);
-      patchEditor({ selectedNodeId: node.id, panelMode: "step" });
+      const [boundNode] = bindDefaultConnections([node], connections);
+      setNodes((current) => [...current, boundNode]);
+      patchEditor({ selectedNodeId: boundNode.id, panelMode: "step" });
     },
-    [nodes, patchEditor, reactFlow, setNodes],
+    [connections, nodes, patchEditor, reactFlow, setNodes],
   );
 
   const onDrop = useCallback(
@@ -420,6 +434,25 @@ function useWorkflowEditorController() {
 
   const updateSelectedNode = (updated: WorkflowNode) =>
     setNodes((current) => current.map((node) => (node.id === updated.id ? updated : node)));
+
+  // Merge config updates against the *current* node state so rapid successive
+  // edits (e.g. toggling switches quickly) never clobber each other with a
+  // stale render-time snapshot.
+  const patchSelectedNodeConfig = useCallback(
+    (updates: Record<string, unknown>, removeKeys?: string[]) => {
+      const nodeId = selectedNodeId;
+      if (!nodeId) return;
+      setNodes((current) =>
+        current.map((node) => {
+          if (node.id !== nodeId) return node;
+          const config = { ...node.data.config, ...updates };
+          for (const key of removeKeys ?? []) delete config[key];
+          return { ...node, data: { ...node.data, config } };
+        }),
+      );
+    },
+    [selectedNodeId, setNodes],
+  );
 
   const deleteSelectedNode = () => {
     if (!selectedNodeId) return;
@@ -468,16 +501,26 @@ function useWorkflowEditorController() {
         });
 
         const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
-        if (waiting) {
+        if (waiting && waiting.plan?.status === "proposed") {
+          patchEditor({
+            pendingApproval: undefined,
+            pendingPlanReview: {
+              backendRunId: runId,
+              nodeId: waiting.nodeId,
+              title: waiting.nodeLabel,
+              steps: waiting.plan.steps.map((planStep) => planStep.title),
+            },
+          });
+        } else if (waiting) {
           const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
-          patchEditor({ pendingApproval: {
+          patchEditor({ pendingPlanReview: undefined, pendingApproval: {
             backendRunId: runId,
             nodeId: waiting.nodeId,
             title: waiting.nodeLabel,
             prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
             input: waiting.input,
           } });
-        } else patchEditor({ pendingApproval: undefined });
+        } else patchEditor({ pendingApproval: undefined, pendingPlanReview: undefined });
 
         setNodes((current) =>
           current.map((node) => {
@@ -518,25 +561,25 @@ function useWorkflowEditorController() {
       selectedNodeId: undefined,
       latestResult: { status: "queued" },
       pendingApproval: undefined,
+      pendingPlanReview: undefined,
     });
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
 
     try {
-      const currentConnections = convexClient
-        ? await convexClient.query(listConnectionsRef, {})
-        : connections;
+      if (!convexClient) {
+        throw new Error("Workflow execution is unavailable because VITE_CONVEX_URL is not configured.");
+      }
+      const client = convexClient;
+      const currentConnections = await client.query(listConnectionsRef, {});
+      const preparedNodes = bindDefaultConnections(nodes, currentConnections);
+      if (preparedNodes !== nodes) setNodes(preparedNodes);
 
-      // Fail before doing any work if a live step has no usable account.
-      const activeNodeIds = nodeIdsForRunScope(nodes, edges, runMode, scopeNodeId);
-      const unready = nodes.find((node) => {
+      // Fail before doing any work if a connector step has no usable account.
+      const activeNodeIds = nodeIdsForRunScope(preparedNodes, edges, runMode, scopeNodeId);
+      const unready = preparedNodes.find((node) => {
         if (!activeNodeIds.has(node.id)) return false;
-        const provider =
-          node.data.nodeType === "slack"
-            ? "slack"
-            : ["gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger", "googleDoc"].includes(node.data.nodeType)
-              ? "google"
-              : undefined;
-        if (!provider || node.data.config.executionMode !== "live") return false;
+        const provider = connectorProviderForNode(node.data.nodeType);
+        if (!provider) return false;
         const ref = String(node.data.config.connectionRef ?? "");
         return !currentConnections.some(
           (connection) =>
@@ -550,53 +593,27 @@ function useWorkflowEditorController() {
         throw new Error(`${unready.data.label} needs an active connected account.`);
       }
 
-      if (convexClient) {
-        const client = convexClient;
-        const updatedAt = Date.now();
-        await client.mutation(upsertWorkflowRef, {
-          externalId: initial.id,
-          name,
-          description,
-          enabled,
-          maxConcurrentRuns,
-          nodes: persistableNodes(nodes),
-          edges,
-          updatedAt,
-        });
-        const runId = await client.mutation(startRunRef, {
-          externalWorkflowId: initial.id,
-          input: { requestedBy: "Editor user", date: new Date().toLocaleDateString() },
-          trigger: "manual",
-          runMode,
-          ...(scopeNodeId ? { scopeNodeId } : {}),
-        });
-        setLatestResult({ id: runId, status: "queued" });
+      const updatedAt = Date.now();
+      await client.mutation(upsertWorkflowRef, {
+        externalId: initial.id,
+        name,
+        description,
+        enabled,
+        maxConcurrentRuns,
+        nodes: persistableNodes(preparedNodes),
+        edges,
+        updatedAt,
+      });
+      const runId = await client.mutation(startRunRef, {
+        externalWorkflowId: initial.id,
+        input: { requestedBy: "Editor user", date: new Date().toLocaleDateString() },
+        trigger: "manual",
+        runMode,
+        ...(scopeNodeId ? { scopeNodeId } : {}),
+      });
+      setLatestResult({ id: runId, status: "queued" });
 
-        await observeBackendRun(client, runId);
-      } else {
-        const demoRun = await runDemo(
-          { ...initial, name, description, enabled, maxConcurrentRuns, nodes, edges, updatedAt: Date.now() },
-          () => undefined,
-          (nodeId, status) =>
-            setNodes((current) =>
-              current.map((node) =>
-                node.id === nodeId ? { ...node, data: { ...node.data, status } } : node,
-              ),
-            ),
-          (request) =>
-            new Promise((resolve) => {
-              demoApprovalResolver.current = resolve;
-              patchEditor({ pendingApproval: request });
-            }),
-          { runMode, scopeNodeId },
-        );
-        setLatestResult({
-          id: demoRun.id,
-          status: demoRun.status,
-          output: demoRun.output,
-          error: demoRun.error,
-        });
-      }
+      await observeBackendRun(client, runId);
     } catch (error) {
       void refreshConnections().catch(() => undefined);
       setLatestResult((current) => ({
@@ -605,14 +622,13 @@ function useWorkflowEditorController() {
         error: error instanceof Error ? error.message : "Workflow failed.",
       }));
     } finally {
-      patchEditor({ running: false, pendingApproval: undefined });
-      demoApprovalResolver.current = undefined;
+      patchEditor({ running: false, pendingApproval: undefined, pendingPlanReview: undefined });
     }
   };
 
   const retryFailedRun = async () => {
     if (running || !convexClient || !latestResult?.id) return;
-    patchEditor({ running: true, panelMode: "run", pendingApproval: undefined });
+    patchEditor({ running: true, panelMode: "run", pendingApproval: undefined, pendingPlanReview: undefined });
     setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })));
     try {
       const runId = await convexClient.mutation(retryRunRef, {
@@ -627,7 +643,35 @@ function useWorkflowEditorController() {
         error: error instanceof Error ? error.message : "Retry failed.",
       }));
     } finally {
-      patchEditor({ running: false, pendingApproval: undefined });
+      patchEditor({ running: false, pendingApproval: undefined, pendingPlanReview: undefined });
+    }
+  };
+
+  const decidePlanReview = async (approved: boolean, steps?: string[], note?: string) => {
+    if (!pendingPlanReview || planBusy) return;
+    patchEditor({ planBusy: true });
+    try {
+      if (convexClient && pendingPlanReview.backendRunId) {
+        await convexClient.mutation(decidePlanRef, {
+          runId: pendingPlanReview.backendRunId,
+          nodeId: pendingPlanReview.nodeId,
+          approved,
+          ...(steps?.length ? { steps } : {}),
+          ...(note?.trim() ? { note: note.trim() } : {}),
+        });
+      }
+      patchEditor({ pendingPlanReview: undefined });
+      setNotice({
+        message: approved ? "Plan approved — the agent is executing it" : "Plan rejected — the run stops here",
+        tone: "info",
+      });
+    } catch (error) {
+      setNotice({
+        message: error instanceof Error ? error.message : "Could not record the plan decision",
+        tone: "error",
+      });
+    } finally {
+      patchEditor({ planBusy: false });
     }
   };
 
@@ -642,9 +686,6 @@ function useWorkflowEditorController() {
           approved,
           ...(note?.trim() ? { note: note.trim() } : {}),
         });
-      } else if (demoApprovalResolver.current) {
-        demoApprovalResolver.current({ approved, ...(note?.trim() ? { note: note.trim() } : {}) });
-        demoApprovalResolver.current = undefined;
       }
       patchEditor({ pendingApproval: undefined });
       setNotice({
@@ -658,6 +699,41 @@ function useWorkflowEditorController() {
       });
     } finally {
       patchEditor({ approvalBusy: false });
+    }
+  };
+
+  const buildChatGraph = () => ({
+    name,
+    description,
+    nodes: persistableNodes(nodes),
+    edges,
+  });
+
+  const applyBuildProposal = (message: BuildChatMessage) => {
+    if (!message.proposal) return;
+    try {
+      const materialized = materializeProposal(message.proposal);
+      setNodes(bindDefaultConnections(materialized.nodes, connections));
+      setEdges(materialized.edges);
+      patchEditor({
+        selectedNodeId: undefined,
+        ...(materialized.name ? { name: materialized.name } : {}),
+        ...(materialized.description ? { description: materialized.description } : {}),
+      });
+      if (convexClient) {
+        void convexClient
+          .mutation(markBuildChatAppliedRef, { messageId: message._id })
+          .catch(() => undefined);
+      }
+      setNotice({
+        message: `Applied ${materialized.nodes.length} steps to the canvas`,
+        tone: "info",
+      });
+    } catch (error) {
+      setNotice({
+        message: error instanceof Error ? error.message : "Could not apply that proposal",
+        tone: "error",
+      });
     }
   };
 
@@ -676,6 +752,7 @@ function useWorkflowEditorController() {
   };
 
   return {
+    workflowExternalId: initial.id,
     name,
     enabled,
     maxConcurrentRuns,
@@ -703,14 +780,18 @@ function useWorkflowEditorController() {
     latestResult,
     pendingApproval,
     approvalBusy,
+    pendingPlanReview,
+    planBusy,
     addNode,
     restoreStarter,
     runWorkflow,
     retryFailedRun,
     updateSelectedNode,
+    patchSelectedNodeConfig,
     deleteSelectedNode,
     duplicateSelectedNode,
     decideApproval,
+    decidePlanReview,
     pinSelectedOutput: (output: unknown) => {
       if (!selectedNode) return;
       updateSelectedNode({
@@ -736,10 +817,13 @@ function useWorkflowEditorController() {
     setRollbackVersionId: (rollbackVersionId: Id<"workflowVersions">) => patchEditor({ rollbackVersionId }),
     publishCurrentVersion,
     rollbackToVersion,
+    buildChatGraph,
+    applyBuildProposal,
   };
 }
 
 function WorkflowEditorView({
+  workflowExternalId,
   name,
   enabled,
   maxConcurrentRuns,
@@ -767,14 +851,18 @@ function WorkflowEditorView({
   latestResult,
   pendingApproval,
   approvalBusy,
+  pendingPlanReview,
+  planBusy,
   addNode,
   restoreStarter,
   runWorkflow,
   retryFailedRun,
   updateSelectedNode,
+  patchSelectedNodeConfig,
   deleteSelectedNode,
   duplicateSelectedNode,
   decideApproval,
+  decidePlanReview,
   pinSelectedOutput,
   unpinSelectedOutput,
   openConnectors,
@@ -785,6 +873,8 @@ function WorkflowEditorView({
   setRollbackVersionId,
   publishCurrentVersion,
   rollbackToVersion,
+  buildChatGraph,
+  applyBuildProposal,
 }: ReturnType<typeof useWorkflowEditorController>) {
   return (
     <div className="route">
@@ -886,6 +976,7 @@ function WorkflowEditorView({
               <Inspector
                 node={selectedNode}
                 onChange={updateSelectedNode}
+                onPatchConfig={patchSelectedNodeConfig}
                 onDelete={deleteSelectedNode}
                 onDuplicate={duplicateSelectedNode}
                 connections={connections}
@@ -910,9 +1001,19 @@ function WorkflowEditorView({
               pendingApproval={pendingApproval}
               approvalBusy={approvalBusy}
               onApproval={(approved, note) => void decideApproval(approved, note)}
+              pendingPlanReview={pendingPlanReview}
+              planBusy={planBusy}
+              onPlanDecision={(approved, steps, note) => void decidePlanReview(approved, steps, note)}
               onRun={() => void runWorkflow()}
               onRetry={() => void retryFailedRun()}
               running={running}
+            />
+          }
+          chat={
+            <BuildChat
+              workflowExternalId={workflowExternalId}
+              getGraph={buildChatGraph}
+              onApply={applyBuildProposal}
             />
           }
         />

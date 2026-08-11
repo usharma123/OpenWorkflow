@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
-export type PanelMode = "step" | "run";
+export type PanelMode = "step" | "run" | "chat";
 
 const WIDTH_KEY = "openworkflow.panelWidth";
 const MIN_WIDTH = 340;
@@ -19,9 +19,10 @@ interface SidePanelProps {
   runBadge?: ReactNode;
   step: ReactNode;
   run: ReactNode;
+  chat: ReactNode;
 }
 
-export function SidePanel({ mode, onModeChange, stepLabel, runBadge, step, run }: SidePanelProps) {
+export function SidePanel({ mode, onModeChange, stepLabel, runBadge, step, run, chat }: SidePanelProps) {
   const [width, setWidth] = useState(initialWidth);
   const dragging = useRef(false);
   const resizeFrame = useRef<number | undefined>(undefined);
@@ -102,8 +103,16 @@ export function SidePanel({ mode, onModeChange, stepLabel, runBadge, step, run }
           Run
           {runBadge}
         </button>
+        <button
+          role="tab"
+          aria-selected={mode === "chat"}
+          className={mode === "chat" ? "is-active" : ""}
+          onClick={() => onModeChange("chat")}
+        >
+          Build
+        </button>
       </div>
-      <div className="side-panel-body">{mode === "step" ? step : run}</div>
+      <div className="side-panel-body">{mode === "step" ? step : mode === "run" ? run : chat}</div>
     </aside>
   );
 }

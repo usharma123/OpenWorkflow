@@ -254,15 +254,6 @@
   display: none;
 }
 
-.wf-node-demo {
-  padding: 0 4px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: 8px;
-  font-weight: 500;
-}
-
 .wf-node-runtime {
   padding: 0 4px;
   border: 1px solid color-mix(in srgb, #6d8cff 38%, var(--border));

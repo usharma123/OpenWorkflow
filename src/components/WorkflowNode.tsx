@@ -17,7 +17,12 @@ export function WorkflowNodeComponent({ data, selected, parentId }: NodeProps<Wo
   const isCondition = data.nodeType === "condition";
   const hasErrorOutput = !isCondition && !isOutput && !isTrigger && data.config.errorOutput === true;
   const status = data.status ?? "idle";
-  const isDemo = item.setup === "connection" && data.config.executionMode !== "live";
+
+  const usesCompute =
+    data.nodeType === "ai" &&
+    (data.config.useCompute === true ||
+      (data.config.useCompute !== false && typeof data.config.mode === "string" && Boolean(data.config.mode)));
+  const agentBadge = usesCompute ? "Compute" : "";
 
   return (
     <div
@@ -41,8 +46,8 @@ export function WorkflowNodeComponent({ data, selected, parentId }: NodeProps<Wo
         <strong>{data.label}</strong>
         <span className="wf-node-description">{data.description}</span>
         <div className="wf-node-foot">
-          {item.runtime === "daytona" && parentId && <span className="wf-node-runtime">Daytona</span>}
-          {isDemo && <span className="wf-node-demo">Demo</span>}
+          {agentBadge && <span className="wf-node-runtime">{agentBadge}</span>}
+          {item.runtime === "daytona" && parentId && <span className="wf-node-runtime">Secure compute</span>}
           {status !== "idle" && (
             <span className={`wf-node-status ${status}`}>
               <span

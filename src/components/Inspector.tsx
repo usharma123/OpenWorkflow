@@ -9,6 +9,7 @@ import { NodeMark } from "./icons";
 interface InspectorProps {
   node: WorkflowNode;
   onChange: (node: WorkflowNode) => void;
+  onPatchConfig: (updates: Record<string, unknown>, removeKeys?: string[]) => void;
   onDelete: () => void;
   onDuplicate: () => void;
   connections: ConnectionMetadata[];
@@ -124,15 +125,16 @@ function ConnectionField({
 
 function InspectorConfiguration({
   node,
-  onChange,
+  onPatchConfig,
   connections,
   onOpenConnectors,
-}: Pick<InspectorProps, "node" | "onChange" | "connections" | "onOpenConnectors">) {
+}: Pick<InspectorProps, "node" | "onPatchConfig" | "connections" | "onOpenConnectors">) {
   const config = node.data.config;
   const type = node.data.nodeType;
-  const set = (key: string, value: unknown) =>
-    onChange({ ...node, data: { ...node.data, config: { ...config, [key]: value } } });
+  const patchConfig = onPatchConfig;
+  const set = (key: string, value: unknown) => patchConfig({ [key]: value });
   const str = (key: string, fallback = "") => String(config[key] ?? fallback);
+  const computeOn = config.useCompute === true || (config.useCompute !== false && Boolean(config.mode));
 
   return (
     <section className="inspector-section">
@@ -208,38 +210,237 @@ function InspectorConfiguration({
               </select>
             </label>
             <Text
-              label="Role and style"
+              label="Role and style (optional)"
               multiline
               value={str("systemPrompt")}
               onChange={(v) => set("systemPrompt", v)}
+              hint="Leave blank to use the default agent prompt."
             />
             <Text
               label="Instructions"
               multiline
               value={str("prompt")}
               onChange={(v) => set("prompt", v)}
-              hint="Insert earlier results with {{input.messages}}."
+              hint="Describe the outcome in plain language. The agent decides how to use compute. Insert earlier results with {{input}}."
             />
+            <div className="chip-row" role="group" aria-label="Starter prompts">
+              {[
+                {
+                  id: "deep-research",
+                  label: "Deep research",
+                  prompt:
+                    "Research {{input.topic}} thoroughly. Compare competing views, cite sources, and write a concise brief with clear takeaways.",
+                },
+                {
+                  id: "competitive",
+                  label: "Competitive scan",
+                  prompt:
+                    "Run a competitive scan on {{input.topic}}. Summarize products, positioning, recent news, and open questions with citations.",
+                },
+                {
+                  id: "analyze-rows",
+                  label: "Analyze + dashboard",
+                  prompt:
+                    "Analyze these rows. Surface the top insights, write a cleaned table, and build an HTML KPI dashboard from {{input}}.",
+                },
+                {
+                  id: "kpi-dashboard",
+                  label: "KPI dashboard",
+                  prompt:
+                    "Build a KPI dashboard from {{input}}. Include summary metrics, a cleaned table, and a self-contained HTML dashboard.",
+                },
+              ].map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  className="chip"
+                  onClick={() => patchConfig({ prompt: chip.prompt, useCompute: true }, ["mode"])}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
             <label className="switch-row">
               <span>
-                <strong>Use web search</strong>
-                <small>Adds current web sources when the model needs them</small>
+                <strong>Use compute</strong>
+                <small>Lets the agent search, fetch, and run code in a secure sandbox when needed</small>
               </span>
               <input
                 type="checkbox"
-                checked={Boolean(config.webSearch)}
-                onChange={(e) => set("webSearch", e.target.checked)}
+                checked={computeOn}
+                onChange={(e) => patchConfig({ useCompute: e.target.checked }, ["mode"])}
               />
             </label>
-            {Boolean(config.webSearch) && (
-              <Num
-                label="Maximum sources"
-                value={Number(config.maxSearchResults ?? 5)}
-                onChange={(v) => set("maxSearchResults", v)}
-                min={1}
-                max={10}
-              />
+            {computeOn && (
+              <>
+                <label className="switch-row">
+                  <span>
+                    <strong>Plan first</strong>
+                    <small>The agent proposes a research plan and pauses for your review before executing</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={config.planFirst === true}
+                    onChange={(e) => set("planFirst", e.target.checked)}
+                  />
+                </label>
+                <Num
+                  label="Maximum tool rounds"
+                  value={Number(config.maxToolRounds ?? 12)}
+                  onChange={(v) => set("maxToolRounds", v)}
+                  min={1}
+                  max={20}
+                />
+                <Num
+                  label="Timeout (seconds)"
+                  value={Number(config.timeoutSeconds ?? 300)}
+                  onChange={(v) => set("timeoutSeconds", v)}
+                  min={30}
+                  max={900}
+                />
+              </>
             )}
+            {!computeOn && (
+              <label className="switch-row">
+                <span>
+                  <strong>Use web search</strong>
+                  <small>Adds current web sources without a sandbox</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(config.webSearch)}
+                  onChange={(e) => set("webSearch", e.target.checked)}
+                />
+              </label>
+            )}
+          </>
+        )}
+
+        {type === "webSearch" && (
+          <>
+            <Text
+              label="Search query"
+              value={str("query")}
+              onChange={(v) => set("query", v)}
+              placeholder="latest updates on {{input.content}}"
+              hint="Insert earlier results with template expressions. Requires EXA_API_KEY in Convex."
+            />
+            <Num
+              label="Maximum results"
+              value={Number(config.numResults ?? 5)}
+              onChange={(v) => set("numResults", v)}
+              min={1}
+              max={10}
+            />
+            <label className="switch-row">
+              <span>
+                <strong>Include page text</strong>
+                <small>Adds a snippet of each page so later steps can quote it</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={config.includeText !== false}
+                onChange={(e) => set("includeText", e.target.checked)}
+              />
+            </label>
+          </>
+        )}
+
+        {type === "gmailSend" && (
+          <>
+            <Text
+              label="To"
+              value={str("to")}
+              onChange={(v) => set("to", v)}
+              placeholder="person@example.com"
+            />
+            <Text label="Subject" value={str("subject")} onChange={(v) => set("subject", v)} />
+            <Text
+              label="Body"
+              multiline
+              value={str("body")}
+              onChange={(v) => set("body", v)}
+              hint="Insert earlier results with {{input.content}}."
+            />
+            <ConnectionField
+              provider="google"
+              value={str("connectionRef")}
+              onChange={(v) => set("connectionRef", v)}
+              connections={connections}
+              onOpenConnectors={onOpenConnectors}
+            />
+          </>
+        )}
+
+        {type === "calendarEvent" && (
+          <>
+            <Text label="Calendar ID" value={str("calendarId", "primary")} onChange={(v) => set("calendarId", v)} hint="Use primary or a calendar ID." />
+            <Text label="Event title" value={str("title")} onChange={(v) => set("title", v)} />
+            <Text label="Event description" multiline value={str("description")} onChange={(v) => set("description", v)} />
+            <Text
+              label="Start time (ISO)"
+              value={str("startIso")}
+              onChange={(v) => set("startIso", v)}
+              placeholder="2026-08-11T15:00:00Z"
+              hint="Leave blank to schedule one hour from now."
+            />
+            <Num
+              label="Duration (minutes)"
+              value={Number(config.durationMinutes ?? 30)}
+              onChange={(v) => set("durationMinutes", v)}
+              min={5}
+              max={1440}
+            />
+            <ConnectionField
+              provider="google"
+              value={str("connectionRef")}
+              onChange={(v) => set("connectionRef", v)}
+              connections={connections}
+              onOpenConnectors={onOpenConnectors}
+            />
+          </>
+        )}
+
+        {type === "sheetsAppend" && (
+          <>
+            <Text label="Spreadsheet ID" value={str("spreadsheetId")} onChange={(v) => set("spreadsheetId", v)} />
+            <Text label="Range" value={str("range", "Sheet1!A:Z")} onChange={(v) => set("range", v)} hint="The row is appended after the last row of this range." />
+            <Text
+              label="Row values"
+              multiline
+              value={str("values")}
+              onChange={(v) => set("values", v)}
+              placeholder='Acme, renewed, {{input.date}}'
+              hint="Separate cells with commas, or provide a JSON array."
+            />
+            <ConnectionField
+              provider="google"
+              value={str("connectionRef")}
+              onChange={(v) => set("connectionRef", v)}
+              connections={connections}
+              onOpenConnectors={onOpenConnectors}
+            />
+          </>
+        )}
+
+        {type === "driveUpload" && (
+          <>
+            <Text label="File name" value={str("fileName", "openworkflow-result.txt")} onChange={(v) => set("fileName", v)} />
+            <Text
+              label="File content"
+              multiline
+              value={str("content")}
+              onChange={(v) => set("content", v)}
+              hint="Leave blank to save the full input as JSON."
+            />
+            <Text label="Folder (optional)" value={str("folder")} onChange={(v) => set("folder", v)} hint="Created in Drive when it does not exist yet." />
+            <ConnectionField
+              provider="google"
+              value={str("connectionRef")}
+              onChange={(v) => set("connectionRef", v)}
+              connections={connections}
+              onOpenConnectors={onOpenConnectors}
+            />
           </>
         )}
 
@@ -491,6 +692,7 @@ function InspectorConfiguration({
 export function Inspector({
   node,
   onChange,
+  onPatchConfig,
   onDelete,
   onDuplicate,
   connections,
@@ -505,8 +707,7 @@ export function Inspector({
   const item = catalogByType[node.data.nodeType];
   const config = node.data.config;
   const type = node.data.nodeType;
-  const set = (key: string, value: unknown) =>
-    onChange({ ...node, data: { ...node.data, config: { ...config, [key]: value } } });
+  const set = (key: string, value: unknown) => onPatchConfig({ [key]: value });
 
   return (
     <div className="inspector">
@@ -536,7 +737,7 @@ export function Inspector({
 
       <InspectorConfiguration
         node={node}
-        onChange={onChange}
+        onPatchConfig={onPatchConfig}
         connections={connections}
         onOpenConnectors={onOpenConnectors}
       />
@@ -575,26 +776,6 @@ export function Inspector({
         </section>
       )}
 
-      {/*
-        Live is the default and reads as unremarkable. Demo is a quiet opt-out
-        rather than a mode the whole interface announces.
-      */}
-      {item.setup === "connection" && (
-        <section className="inspector-section">
-          <label className="switch-row">
-            <span>
-              <strong>Run against sample data</strong>
-              <small>Skips the real account and returns a fixed example</small>
-            </span>
-            <input
-              type="checkbox"
-              checked={config.executionMode !== "live"}
-              onChange={(e) => set("executionMode", e.target.checked ? "demo" : "live")}
-            />
-          </label>
-        </section>
-      )}
-
       {!type.endsWith("Trigger") && !["condition", "output", "daytonaSandbox"].includes(type) && (
         <section className="inspector-section">
           <label className="switch-row">
@@ -611,7 +792,7 @@ export function Inspector({
         </section>
       )}
 
-      {!type.endsWith("Trigger") && !["approval", "delay", "output", "daytonaSandbox", "googleDoc", "slack"].includes(type) && (
+      {!type.endsWith("Trigger") && !["approval", "delay", "output", "daytonaSandbox", "googleDoc", "slack", "gmailSend", "calendarEvent", "sheetsAppend", "driveUpload"].includes(type) && (
         <section className="inspector-section">
           <span className="t-eyebrow">Reliability</span>
           <Num

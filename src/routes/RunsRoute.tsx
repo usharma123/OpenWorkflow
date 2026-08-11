@@ -120,6 +120,8 @@ export function RunsRoute() {
                     result={result}
                     approvalBusy={false}
                     onApproval={() => undefined}
+                    planBusy={false}
+                    onPlanDecision={() => undefined}
                     onRun={() => undefined}
                     running={false}
                   />

@@ -67,12 +67,11 @@
 }
 
 /* Any element carrying a category resolves --accent for its subtree. */
-[data-cat="Start"] { --accent: var(--cat-start); }
-[data-cat="Think"] { --accent: var(--cat-think); }
+[data-cat="Triggers"] { --accent: var(--cat-start); }
+[data-cat="AI"] { --accent: var(--cat-think); }
+[data-cat="Apps"] { --accent: var(--cat-deliver); }
+[data-cat="Logic"] { --accent: var(--cat-advanced); }
 [data-cat="Compute"] { --accent: var(--cat-compute); }
-[data-cat="Review"] { --accent: var(--cat-review); }
-[data-cat="Deliver"] { --accent: var(--cat-deliver); }
-[data-cat="Advanced"] { --accent: var(--cat-advanced); }
 
 @media (prefers-reduced-motion: reduce) {
   *,

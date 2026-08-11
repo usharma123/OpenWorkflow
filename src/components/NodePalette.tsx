@@ -4,7 +4,7 @@ import { NODE_CATALOG } from "../catalog";
 import type { NodeCategory, WorkflowNodeType } from "../types";
 import { NodeMark } from "./icons";
 
-const CATEGORIES: NodeCategory[] = ["Start", "Think", "Compute", "Review", "Deliver", "Advanced"];
+const CATEGORIES: NodeCategory[] = ["Triggers", "AI", "Apps", "Logic", "Compute"];
 
 function startDrag(event: React.DragEvent, type: WorkflowNodeType) {
   event.dataTransfer.setData("application/openworkflow-node", type);
@@ -17,12 +17,14 @@ export const NodePalette = memo(function NodePalette({ onAdd }: { onAdd: (type: 
 
   const filtered = useMemo(
     () =>
-      NODE_CATALOG.filter(
-        (item) =>
-          !normalized ||
+      NODE_CATALOG.filter((item) => {
+        if (item.hidden && !normalized) return false;
+        if (!normalized) return true;
+        return (
           item.label.toLowerCase().includes(normalized) ||
-          item.description.toLowerCase().includes(normalized),
-      ),
+          item.description.toLowerCase().includes(normalized)
+        );
+      }),
     [normalized],
   );
 
