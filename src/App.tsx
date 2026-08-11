@@ -26,6 +26,7 @@ import {
   getWorkflowRef,
   listWorkflowVersionsRef,
   listConnectionsRef,
+  latestRunRef,
   markBuildChatAppliedRef,
   retryRunRef,
   rollbackWorkflowRef,
@@ -33,6 +34,7 @@ import {
   publishWorkflowRef,
   upsertWorkflowRef,
   type BuildChatMessage,
+  type StoredRun,
 } from "./lib/convexClient";
 import { materializeProposal } from "./lib/buildProposal";
 import { bindDefaultConnections, connectorProviderForNode } from "./lib/connectionBinding";
@@ -143,6 +145,9 @@ function useWorkflowEditorController() {
   const reactFlow = useReactFlow<WorkflowNode>();
   const saveTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
+  const latestRunHydrated = useRef(false);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
   const skipInitialSave = useRef(true);
   const persistedNodes = useMemo(() => persistableNodes(nodes), [nodes]);
   const draftSnapshot = useMemo(
@@ -473,7 +478,61 @@ function useWorkflowEditorController() {
     patchEditor({ selectedNodeId: duplicate.id });
   };
 
-  const observeBackendRun = async (
+  const applyBackendRun = useCallback((
+    run: StoredRun,
+    runId: Id<"workflowRuns">,
+  ) => {
+    setLatestResult({
+      id: runId,
+      status: run.status,
+      output: run.output,
+      error: run.error,
+      steps: run.steps.map((step) => ({ id: step._id, ...step })),
+    });
+
+    const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
+    if (waiting && waiting.plan?.status === "proposed") {
+      patchEditor({
+        pendingApproval: undefined,
+        pendingPlanReview: {
+          backendRunId: runId,
+          nodeId: waiting.nodeId,
+          title: waiting.nodeLabel,
+          steps: waiting.plan.steps.map((planStep) => planStep.title),
+        },
+      });
+    } else if (waiting) {
+      const workflowNode = nodesRef.current.find((node) => node.id === waiting.nodeId);
+      patchEditor({ pendingPlanReview: undefined, pendingApproval: {
+        backendRunId: runId,
+        nodeId: waiting.nodeId,
+        title: waiting.nodeLabel,
+        prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
+        input: waiting.input,
+      } });
+    } else patchEditor({ pendingApproval: undefined, pendingPlanReview: undefined });
+
+    setNodes((current) =>
+      current.map((node) => {
+        const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
+        const status =
+          latest?.status === "completed"
+            ? "success"
+            : latest?.status === "failed"
+              ? "error"
+              : latest?.status === "waiting"
+                ? "waiting"
+                : latest
+                  ? "running"
+                  : "idle";
+        return node.data.status === status
+          ? node
+          : { ...node, data: { ...node.data, status } };
+      }),
+    );
+  }, [patchEditor, setLatestResult, setNodes]);
+
+  const observeBackendRun = useCallback((
     client: NonNullable<typeof convexClient>,
     runId: Id<"workflowRuns">,
   ) => new Promise<void>((resolve, reject) => {
@@ -483,54 +542,7 @@ function useWorkflowEditorController() {
       try {
         const run = watch.localQueryResult();
         if (!run) return;
-        setLatestResult({
-          id: runId,
-          status: run.status,
-          output: run.output,
-          error: run.error,
-          steps: run.steps.map((step) => ({ id: step._id, ...step })),
-        });
-
-        const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
-        if (waiting && waiting.plan?.status === "proposed") {
-          patchEditor({
-            pendingApproval: undefined,
-            pendingPlanReview: {
-              backendRunId: runId,
-              nodeId: waiting.nodeId,
-              title: waiting.nodeLabel,
-              steps: waiting.plan.steps.map((planStep) => planStep.title),
-            },
-          });
-        } else if (waiting) {
-          const workflowNode = nodes.find((node) => node.id === waiting.nodeId);
-          patchEditor({ pendingPlanReview: undefined, pendingApproval: {
-            backendRunId: runId,
-            nodeId: waiting.nodeId,
-            title: waiting.nodeLabel,
-            prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
-            input: waiting.input,
-          } });
-        } else patchEditor({ pendingApproval: undefined, pendingPlanReview: undefined });
-
-        setNodes((current) =>
-          current.map((node) => {
-            const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
-            const status =
-              latest?.status === "completed"
-                ? "success"
-                : latest?.status === "failed"
-                  ? "error"
-                  : latest?.status === "waiting"
-                    ? "waiting"
-                    : latest
-                      ? "running"
-                      : "idle";
-            return node.data.status === status
-              ? node
-              : { ...node, data: { ...node.data, status } };
-          }),
-        );
+        applyBackendRun(run, runId);
 
         if (run.status === "completed" || run.status === "failed") {
           unsubscribe();
@@ -542,7 +554,40 @@ function useWorkflowEditorController() {
         reject(error);
       }
     });
-  });
+  }), [applyBackendRun]);
+
+  useEffect(() => {
+    if (!backendLoaded || !convexClient || latestRunHydrated.current) return;
+    latestRunHydrated.current = true;
+    let disposed = false;
+    const client = convexClient;
+    void client.query(latestRunRef, { externalWorkflowId: initial.id }).then((run) => {
+      if (disposed || !run) return;
+      applyBackendRun(run, run._id);
+      if (run.status !== "queued" && run.status !== "running" && run.status !== "waiting") return;
+      patchEditor({ running: true, panelMode: "run" });
+      void observeBackendRun(client, run._id)
+        .catch((error) => {
+          if (disposed) return;
+          setLatestResult((current) => ({
+            ...current,
+            status: "failed",
+            error: error instanceof Error ? error.message : "Workflow failed.",
+          }));
+        })
+        .finally(() => {
+          if (!disposed) patchEditor({ running: false });
+        });
+    }).catch((error) => {
+      if (!disposed) {
+        setNotice({
+          message: error instanceof Error ? error.message : "Could not restore the latest run",
+          tone: "error",
+        });
+      }
+    });
+    return () => { disposed = true; };
+  }, [applyBackendRun, backendLoaded, initial.id, observeBackendRun, patchEditor, setLatestResult, setNotice]);
 
   const runWorkflow = async (runMode: EditorRunMode = "full", scopeNodeId?: string) => {
     if (running) return;

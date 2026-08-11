@@ -19,6 +19,7 @@ export const removeWorkflowRef = api.workflows.remove;
 export const startRunRef = api.runs.startRun;
 export const retryRunRef = api.runs.retry;
 export const getRunRef = api.runs.get;
+export const latestRunRef = api.runs.latestForWorkflow;
 export const approveRunRef = api.runs.approve;
 export const decidePlanRef = api.runs.decidePlan;
 export const listConnectionsRef = api.connections.list;

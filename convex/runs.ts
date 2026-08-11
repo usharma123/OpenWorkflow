@@ -234,6 +234,43 @@ export const get = query({
   },
 });
 
+/** Rehydrate the editor after a reload without loading the full run history. */
+export const latestForWorkflow = query({
+  args: { externalWorkflowId: v.string() },
+  handler: async (ctx, { externalWorkflowId }) => {
+    const principal = await requirePrincipal(ctx);
+    const workflow = await ctx.db
+      .query("workflows")
+      .withIndex("by_owner_external_id", (q) =>
+        q.eq("ownerKey", principal.ownerKey).eq("externalId", externalWorkflowId))
+      .unique();
+    if (!workflow) return null;
+    const run = await ctx.db
+      .query("workflowRuns")
+      .withIndex("by_workflow", (q) => q.eq("workflowId", workflow._id))
+      .order("desc")
+      .first();
+    if (!run || run.ownerKey !== principal.ownerKey) return null;
+    const [steps, agentTasks] = await Promise.all([
+      ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+    ]);
+    const runtimeAgents = agentsByStep(
+      agentTasks.filter((task) => task.ownerKey === principal.ownerKey),
+      true,
+    );
+    return {
+      ...run,
+      steps: steps
+        .filter((step) => step.ownerKey === principal.ownerKey)
+        .map((step) => ({
+          ...step,
+          agents: runtimeAgents.get(String(step._id)) ?? [],
+        })),
+    };
+  },
+});
+
 export const startRun = mutation({
   args: {
     externalWorkflowId: v.string(),
