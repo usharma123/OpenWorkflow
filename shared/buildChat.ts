@@ -88,6 +88,7 @@ export function buildChatSystemPrompt(): string {
     "- Wire steps left to right with edges; every non-trigger node needs at least one incoming edge.",
     "- condition nodes branch: edges leaving them should set sourceHandle to \"true\" or \"false\".",
     "- Reference earlier results in config strings with {{input}} or {{input.field}} template expressions.",
+    "- For gmailSend bodies that email an AI report or other rich result, use {{input.content}}, never {{input}}; the latter serializes the entire workflow payload as JSON.",
     "- Include an approval step before anything is shared externally when the user's intent involves review.",
     "- Connector steps always act through the user's connected account. Do not add executionMode or simulated connector behavior; the editor binds a compatible active account automatically and fails clearly when none is available.",
     "- When a user asks to save a report, brief, analysis, or other readable document to Google or Google Drive, use googleDoc so the result is a native, formatted Google Doc. Use driveUpload only when the user explicitly asks for a raw text file or another file upload.",

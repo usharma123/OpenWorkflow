@@ -8,6 +8,7 @@ import { decryptSecret } from "./secretCrypto";
 import { hasRequiredScopes } from "./policies";
 import { renderTemplate } from "./template";
 import { markdownToGoogleDocs } from "../shared/googleDocsMarkdown";
+import { buildGmailMessage, preferEmailContentTemplate } from "../shared/emailMarkdown";
 
 type WorkflowNode = {
   data: { nodeType: string; config: Record<string, unknown> };
@@ -135,13 +136,17 @@ export const executeLiveConnector = internalAction({
         const to = renderTemplate(String(config.to ?? ""), input, stepOutputs).replace(/[\r\n]+/g, " ").trim();
         if (!to) throw new Error("Add a recipient email address before sending Gmail.");
         const subject = renderTemplate(String(config.subject ?? ""), input, stepOutputs).replace(/[\r\n]+/g, " ").trim();
-        const body = renderTemplate(String(config.body ?? "{{input.content}}"), input, stepOutputs);
+        const bodyTemplate = preferEmailContentTemplate(String(config.body ?? "{{input.content}}"), input);
+        const body = renderTemplate(bodyTemplate, input, stepOutputs);
         const encodedSubject = /^[\x20-\x7e]*$/.test(subject)
           ? subject
           : `=?UTF-8?B?${base64Encode(subject)}?=`;
-        const raw = base64UrlEncode(
-          [`To: ${to}`, `Subject: ${encodedSubject}`, 'Content-Type: text/plain; charset="UTF-8"', "", body].join("\r\n"),
-        );
+        const raw = base64UrlEncode(buildGmailMessage({
+          to,
+          encodedSubject,
+          markdown: body,
+          boundary: `openworkflow-${crypto.randomUUID()}`,
+        }));
         const sendResponse = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
           method: "POST",
           headers: { Authorization: `Bearer ${oauth.token}`, "Content-Type": "application/json" },
