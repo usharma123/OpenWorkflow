@@ -2,8 +2,10 @@ import {
   Bot,
   Braces,
   Clock3,
+  CalendarDays,
   Container,
   FileCode2,
+  FileClock,
   GitFork,
   GitBranch,
   Globe2,
@@ -11,6 +13,7 @@ import {
   Radio,
   Send,
   Terminal,
+  TableProperties,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -25,6 +28,7 @@ import { GmailMark, GoogleDocsMark, SlackMark } from "./BrandMarks";
  */
 const BRAND_MARKS: Partial<Record<WorkflowNodeType, (props: { size?: number }) => ReactElement>> = {
   gmailTrigger: GmailMark,
+  gmailEventTrigger: GmailMark,
   googleDoc: GoogleDocsMark,
   slack: SlackMark,
 };
@@ -34,6 +38,10 @@ const GLYPHS: Record<WorkflowNodeType, LucideIcon> = {
   webhookTrigger: Radio,
   scheduleTrigger: Clock3,
   gmailTrigger: Bot,
+  gmailEventTrigger: Bot,
+  calendarTrigger: CalendarDays,
+  driveTrigger: FileClock,
+  sheetsTrigger: TableProperties,
   ai: Bot,
   googleDoc: Bot,
   slack: Bot,

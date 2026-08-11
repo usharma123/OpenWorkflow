@@ -33,7 +33,8 @@ export function validateWorkflowGraph(nodes: WorkflowGraphNode[], edges: Workflo
   const nodeIds = new Set<string>();
   const nodesById = new Map<string, WorkflowGraphNode>();
   const allowedTypes = new Set([
-    "manualTrigger", "webhookTrigger", "scheduleTrigger", "gmailTrigger", "ai", "googleDoc",
+    "manualTrigger", "webhookTrigger", "scheduleTrigger", "gmailTrigger", "gmailEventTrigger",
+    "calendarTrigger", "driveTrigger", "sheetsTrigger", "ai", "googleDoc",
     "slack", "http", "condition", "transform", "delay", "approval", "daytonaSandbox",
     "code", "shell", "git", "output",
   ]);

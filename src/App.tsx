@@ -459,7 +459,7 @@ function useWorkflowEditorController() {
         const provider =
           node.data.nodeType === "slack"
             ? "slack"
-            : ["gmailTrigger", "googleDoc"].includes(node.data.nodeType)
+            : ["gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger", "googleDoc"].includes(node.data.nodeType)
               ? "google"
               : undefined;
         if (!provider || node.data.config.executionMode !== "live") return false;

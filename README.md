@@ -21,7 +21,8 @@ Safe demo mode is explicit and remains the default. Connected mode uses each sig
 - Rejected approvals terminate the durable run before Slack executes.
 - Gmail snippets and bodies are removed from persisted run output.
 
-Google Calendar, Outlook, and Microsoft Teams are marked **Coming soon** because they do not yet have complete OAuth and connector paths.
+Google Workspace event triggers cover new Gmail messages, Calendar event changes, Drive file changes,
+and appended Sheets rows. Outlook and Microsoft Teams remain **Coming soon**.
 
 ## 1. Install and run locally
 
@@ -78,11 +79,14 @@ OpenWorkflow requests only:
 - `https://www.googleapis.com/auth/gmail.readonly`
 - `https://www.googleapis.com/auth/documents`
 - `https://www.googleapis.com/auth/drive.file`
+- `https://www.googleapis.com/auth/drive.metadata.readonly`
+- `https://www.googleapis.com/auth/calendar.readonly`
+- `https://www.googleapis.com/auth/spreadsheets.readonly`
 
 In Google Cloud:
 
-1. Create/select a project and enable the Gmail API, Google Docs API, and Google Drive API.
-2. Configure the OAuth consent screen and add the three scopes above.
+1. Create/select a project and enable the Gmail, Google Docs, Google Drive, Google Calendar, and Google Sheets APIs.
+2. Configure the OAuth consent screen and add the scopes above.
 3. Create a Web OAuth client using the exact redirect URI shown by Clerk's Google social connection.
 4. Keep a Testing app limited to explicit test users, or complete Google's production/verification requirements before broad release.
 
@@ -90,18 +94,23 @@ In Clerk:
 
 1. Add Google as a social connection.
 2. Enable custom credentials and enter the Google client ID and secret.
-3. Configure the three additional scopes above.
+3. Configure the additional scopes above.
 4. Activate the connection.
 
 Those Clerk connection scopes are what make the initial Google sign-in double as a Workspace
 grant. If they are absent or incomplete, sign-in still succeeds; the setup screen detects the
 missing grant and offers a separate **Connect Google** authorization flow.
 
-The product's **Connect Google** button uses Clerk's `createExternalAccount()` or `reauthorize()` flow with those same scopes. Convex calls `getUserOauthAccessToken(userId, "google")` for every durable Gmail or Docs action and matches the selected external account ID. Google tokens never enter local storage, workflow definitions, or Convex tables.
+The product's **Connect Google** button uses Clerk's `createExternalAccount()` or `reauthorize()` flow with those same scopes. Convex calls `getUserOauthAccessToken(userId, "google")` for every durable Workspace action and matches the selected external account ID. Google tokens never enter local storage, workflow definitions, or Convex tables.
+
+Enabled workflows poll Workspace event triggers once per minute. The first poll records a baseline;
+later polls start idempotent runs only for newly observed provider events. Dedupe keys expire after 30
+days, and Gmail message content is redacted before run data is persisted.
 
 Keep the app origin and callback routes available throughout Clerk's verification flow. In development, Clerk may send a session reverification through its hosted Account Portal before returning to the app. `ClerkProvider` therefore uses `/` as its sign-in and sign-up fallback, while `/sso-callback` remains the normal OAuth callback. A same-tab `sessionStorage` marker contains only the boolean fact that Google synchronization is pending; it never contains a provider token or account data. Returning to either route causes the server to read the verified external account from Clerk and persist only safe metadata in Convex.
 
-Disconnect removes the Clerk external account. Clerk may reject removal when it is the user's only sign-in factor; add another sign-in method first in that case.
+Disconnect disables Workspace access inside OpenWorkflow without removing the Google identity that may
+still be required for sign-in.
 
 ## 4. Configure Slack OAuth
 

@@ -66,7 +66,7 @@ export function SetupScreen() {
                 {syncing
                   ? "Confirming your grant…"
                   : googleAccount
-                    ? `${googleAccount.ownerLabel} · Gmail, Docs, Drive`
+                    ? `${googleAccount.ownerLabel} · Gmail, Calendar, Drive, Docs, Sheets`
                     : "Not connected"}
               </small>
             </div>

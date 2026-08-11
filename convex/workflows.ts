@@ -74,7 +74,7 @@ export const upsert = mutation({
       const nodeType = node?.data?.nodeType;
       const config = node?.data?.config;
       if (
-        (nodeType === "gmailTrigger" || nodeType === "googleDoc") &&
+        (["gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger", "googleDoc"].includes(String(nodeType))) &&
         config?.executionMode === "live" &&
         typeof config.connectionRef === "string" &&
         config.connectionRef
@@ -240,12 +240,13 @@ export const remove = mutation({
     const principal = await requirePrincipal(ctx);
     const workflow = await ctx.db.get(workflowId);
     if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
-    const [runs, versions] = await Promise.all([
+    const [runs, versions, triggerEvents] = await Promise.all([
       ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
       ctx.db
         .query("workflowVersions")
         .withIndex("by_workflow_version", (q) => q.eq("workflowId", workflowId))
         .collect(),
+      ctx.db.query("triggerEvents").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
     ]);
     await Promise.all(runs.map(async (run) => {
       const [steps, auditLogs] = await Promise.all([
@@ -259,6 +260,7 @@ export const remove = mutation({
       await ctx.db.delete(run._id);
     }));
     await Promise.all(versions.map((version) => ctx.db.delete(version._id)));
+    await Promise.all(triggerEvents.map((event) => ctx.db.delete(event._id)));
     await ctx.db.delete(workflowId);
   },
 });

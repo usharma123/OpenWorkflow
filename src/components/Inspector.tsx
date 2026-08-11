@@ -164,6 +164,41 @@ function InspectorConfiguration({
           </>
         )}
 
+        {type === "gmailEventTrigger" && (
+          <>
+            <Text
+              label="Gmail search"
+              value={str("query", "is:unread")}
+              onChange={(v) => set("query", v)}
+              placeholder="from:customer@example.com"
+              hint="The workflow starts once for each newly arrived matching message."
+            />
+            <ConnectionField provider="google" value={str("connectionRef")} onChange={(v) => set("connectionRef", v)} connections={connections} onOpenConnectors={onOpenConnectors} />
+          </>
+        )}
+
+        {type === "calendarTrigger" && (
+          <>
+            <Text label="Calendar ID" value={str("calendarId", "primary")} onChange={(v) => set("calendarId", v)} hint="Use primary or a calendar ID." />
+            <ConnectionField provider="google" value={str("connectionRef")} onChange={(v) => set("connectionRef", v)} connections={connections} onOpenConnectors={onOpenConnectors} />
+          </>
+        )}
+
+        {type === "driveTrigger" && (
+          <>
+            <Text label="Folder ID (optional)" value={str("folderId")} onChange={(v) => set("folderId", v)} hint="Leave blank to watch all visible Drive files." />
+            <ConnectionField provider="google" value={str("connectionRef")} onChange={(v) => set("connectionRef", v)} connections={connections} onOpenConnectors={onOpenConnectors} />
+          </>
+        )}
+
+        {type === "sheetsTrigger" && (
+          <>
+            <Text label="Spreadsheet ID" value={str("spreadsheetId")} onChange={(v) => set("spreadsheetId", v)} />
+            <Text label="Range" value={str("range", "Sheet1!A:Z")} onChange={(v) => set("range", v)} hint="The first row is treated as column names." />
+            <ConnectionField provider="google" value={str("connectionRef")} onChange={(v) => set("connectionRef", v)} connections={connections} onOpenConnectors={onOpenConnectors} />
+          </>
+        )}
+
         {type === "ai" && (
           <>
             <label className="field">

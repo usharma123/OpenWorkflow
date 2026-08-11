@@ -32,7 +32,7 @@ export async function createPinnedRun(
   definition: Doc<"workflows">,
   trigger: string,
   input: unknown,
-  options: { runMode?: "full" | "single" | "through"; scopeNodeId?: string } = {},
+  options: { runMode?: "full" | "single" | "through" | "resume"; scopeNodeId?: string } = {},
 ) {
   if (!definition.ownerKey || !definition.ownerUserId) throw new Error("Workflow ownership is invalid.");
   const version = await ensureWorkflowVersion(ctx, definition);

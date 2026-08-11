@@ -16,6 +16,7 @@ export default defineSchema({
     webhookSlug: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
     lastScheduleMinuteByNode: v.optional(v.any()),
+    googleTriggerState: v.optional(v.any()),
     version: v.optional(v.number()),
     currentVersionId: v.optional(v.id("workflowVersions")),
     createdAt: v.number(),
@@ -150,4 +151,15 @@ export default defineSchema({
     .index("by_run", ["runId"])
     .index("by_created_at", ["createdAt"])
     .index("by_owner_created_at", ["ownerKey", "createdAt"]),
+
+  triggerEvents: defineTable({
+    ownerKey: v.string(),
+    workflowId: v.id("workflows"),
+    nodeId: v.string(),
+    dedupeKey: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_dedupe_key", ["dedupeKey"])
+    .index("by_workflow", ["workflowId"])
+    .index("by_created_at", ["createdAt"]),
 });
