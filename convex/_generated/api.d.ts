@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as agentExecution from "../agentExecution.js";
 import type * as auth from "../auth.js";
 import type * as connectionActions from "../connectionActions.js";
 import type * as connections from "../connections.js";
@@ -24,9 +25,11 @@ import type * as openrouterStream from "../openrouterStream.js";
 import type * as policies from "../policies.js";
 import type * as runs from "../runs.js";
 import type * as schedules from "../schedules.js";
+import type * as searchExecution from "../searchExecution.js";
 import type * as secretCrypto from "../secretCrypto.js";
 import type * as template from "../template.js";
 import type * as webhooks from "../webhooks.js";
+import type * as workflowChat from "../workflowChat.js";
 import type * as workflows from "../workflows.js";
 
 import type {
@@ -36,6 +39,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentExecution: typeof agentExecution;
   auth: typeof auth;
   connectionActions: typeof connectionActions;
   connections: typeof connections;
@@ -52,9 +56,11 @@ declare const fullApi: ApiFromModules<{
   policies: typeof policies;
   runs: typeof runs;
   schedules: typeof schedules;
+  searchExecution: typeof searchExecution;
   secretCrypto: typeof secretCrypto;
   template: typeof template;
   webhooks: typeof webhooks;
+  workflowChat: typeof workflowChat;
   workflows: typeof workflows;
 }>;
 

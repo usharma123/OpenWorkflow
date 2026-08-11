@@ -11,11 +11,14 @@ import { hasRequiredScopes } from "./policies";
 const GOOGLE_PROVIDER = "google" as const;
 const GOOGLE_REQUIRED_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/documents",
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/drive.metadata.readonly",
   "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/spreadsheets.readonly",
+  "https://www.googleapis.com/auth/spreadsheets",
 ];
 
 const connectionFailure = (code: string, message: string) => new ConvexError({ code, message });

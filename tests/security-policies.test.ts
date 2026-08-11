@@ -29,6 +29,13 @@ describe("connector scopes", () => {
     expect(hasRequiredGoogleScopes(GOOGLE_SCOPES.join(" "))).toBe(true);
     expect(hasRequiredGoogleScopes(GOOGLE_SCOPES.slice(0, 2).join(" "))).toBe(false);
   });
+
+  test("requests write scopes for the Google action steps", () => {
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/gmail.send");
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/calendar.events");
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/spreadsheets");
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/drive.file");
+  });
 });
 
 describe("approval gate", () => {
@@ -86,6 +93,20 @@ describe("saved workflow graph validation", () => {
       },
       { ...code, parentId: "sandbox" },
     ], [])).not.toThrow();
+  });
+
+  test("allows Agent AI steps with compute without a Daytona boundary", () => {
+    expect(() => validateWorkflowGraph([{
+      id: "agent",
+      type: "workflow",
+      position: { x: 0, y: 0 },
+      data: {
+        nodeType: "ai",
+        label: "Agent",
+        description: "",
+        config: { useCompute: true, prompt: "Research {{input.topic}}" },
+      },
+    }], [])).not.toThrow();
   });
 
   test("rejects unsafe Daytona domain allowlists", () => {

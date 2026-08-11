@@ -4,6 +4,45 @@ import { requirePrincipal } from "./auth";
 import { validateWorkflowGraph } from "./policies";
 import { ensureWorkflowVersion } from "./runs";
 
+const GOOGLE_CONNECTOR_NODE_TYPES = [
+  "gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger",
+  "googleDoc", "gmailSend", "calendarEvent", "sheetsAppend", "driveUpload",
+];
+
+const CONNECTOR_PROVIDER_BY_NODE_TYPE: Record<string, "google" | "slack"> = Object.fromEntries([
+  ...GOOGLE_CONNECTOR_NODE_TYPES.map((type) => [type, "google" as const]),
+  ["slack", "slack" as const],
+]);
+
+type ConnectionRecord = {
+  externalId: string;
+  provider: "google" | "slack" | "microsoft";
+  status: "active" | "needs_reauth" | "disabled";
+};
+
+function bindActiveConnections(nodes: any[], connections: ConnectionRecord[]) {
+  const activeByProvider = new Map<"google" | "slack", ConnectionRecord[]>();
+  for (const connection of connections) {
+    if (connection.status !== "active" || connection.provider === "microsoft") continue;
+    activeByProvider.set(connection.provider, [
+      ...(activeByProvider.get(connection.provider) ?? []),
+      connection,
+    ]);
+  }
+  return nodes.map((node) => {
+    const provider = CONNECTOR_PROVIDER_BY_NODE_TYPE[String(node?.data?.nodeType ?? "")];
+    if (!provider) return node;
+    const config = { ...(node.data.config ?? {}) };
+    delete config.executionMode;
+    const choices = activeByProvider.get(provider) ?? [];
+    const currentRef = typeof config.connectionRef === "string" ? config.connectionRef : "";
+    if (!choices.some((connection) => connection.externalId === currentRef) && choices[0]) {
+      config.connectionRef = choices[0].externalId;
+    }
+    return { ...node, data: { ...node.data, config } };
+  });
+}
+
 const workflowArgs = {
   externalId: v.string(),
   name: v.string(),
@@ -107,9 +146,21 @@ export const publish = mutation({
       if (nodeType === "webhookTrigger" && typeof config?.slug === "string" && config.slug.trim()) {
         publishedWebhookSlug = config.slug.trim();
       }
-      if (["gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger", "googleDoc"].includes(nodeType) &&
-        config?.executionMode === "live" && typeof config.connectionRef === "string" && config.connectionRef) {
-        googleRefs.add(config.connectionRef);
+      const provider = CONNECTOR_PROVIDER_BY_NODE_TYPE[nodeType];
+      if (provider) {
+        if (typeof config?.connectionRef !== "string" || !config.connectionRef) {
+          throw new Error(`${node?.data?.label ?? nodeType} needs an active connected account before publishing.`);
+        }
+        if (provider === "google") googleRefs.add(config.connectionRef);
+        const connection = await ctx.db
+          .query("connections")
+          .withIndex("by_owner_external_id", (q) =>
+            q.eq("ownerKey", principal.ownerKey).eq("externalId", config.connectionRef as string),
+          )
+          .unique();
+        if (!connection || connection.provider !== provider || connection.status !== "active") {
+          throw new Error(`Reconnect the account used by ${node?.data?.label ?? nodeType} before publishing.`);
+        }
       }
     }
     const connectionOwners = new Set<string>();
@@ -181,7 +232,12 @@ export const upsert = mutation({
   args: workflowArgs,
   handler: async (ctx, args) => {
     const principal = await requirePrincipal(ctx);
-    validateWorkflowGraph(args.nodes, args.edges);
+    const ownerConnections = await ctx.db
+      .query("connections")
+      .withIndex("by_owner_provider", (q) => q.eq("ownerKey", principal.ownerKey))
+      .collect();
+    const normalizedArgs = { ...args, nodes: bindActiveConnections(args.nodes, ownerConnections) };
+    validateWorkflowGraph(normalizedArgs.nodes, normalizedArgs.edges);
     if (!Number.isInteger(args.maxConcurrentRuns) || args.maxConcurrentRuns < 1 || args.maxConcurrentRuns > 25) {
       throw new Error("Concurrent run limit must be between 1 and 25.");
     }
@@ -193,12 +249,11 @@ export const upsert = mutation({
       .unique();
     const googleConnectionRefs = new Set<string>();
     const webhookSlugs = new Set<string>();
-    for (const node of args.nodes) {
+    for (const node of normalizedArgs.nodes) {
       const nodeType = node?.data?.nodeType;
       const config = node?.data?.config;
       if (
-        (["gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger", "googleDoc"].includes(String(nodeType))) &&
-        config?.executionMode === "live" &&
+        GOOGLE_CONNECTOR_NODE_TYPES.includes(String(nodeType)) &&
         typeof config.connectionRef === "string" &&
         config.connectionRef
       ) {
@@ -238,21 +293,21 @@ export const upsert = mutation({
       ? existing?.webhookSecret ?? crypto.randomUUID().replaceAll("-", "")
       : undefined;
     if (existing) {
-      const changed = definitionChanged(existing, args);
+      const changed = definitionChanged(existing, normalizedArgs);
       const version = existing.currentVersionId && !changed
         ? existing.version ?? 1
         : (existing.version ?? 0) + 1;
-      await ctx.db.patch(existing._id, { ...args, ...ownership, webhookSlug, webhookSecret, version });
+      await ctx.db.patch(existing._id, { ...normalizedArgs, ...ownership, webhookSlug, webhookSecret, version });
       if (!existing.currentVersionId || changed) {
         const currentVersionId = await ctx.db.insert("workflowVersions", {
           ownerKey: principal.ownerKey,
           workflowId: existing._id,
           version,
-          name: args.name,
-          description: args.description,
-          enabled: args.enabled,
-          nodes: args.nodes,
-          edges: args.edges,
+          name: normalizedArgs.name,
+          description: normalizedArgs.description,
+          enabled: normalizedArgs.enabled,
+          nodes: normalizedArgs.nodes,
+          edges: normalizedArgs.edges,
           createdAt: Date.now(),
         });
         await ctx.db.patch(existing._id, { currentVersionId });
@@ -260,7 +315,7 @@ export const upsert = mutation({
       return existing._id;
     }
     const workflowId = await ctx.db.insert("workflows", {
-      ...args,
+      ...normalizedArgs,
       ...ownership,
       webhookSlug,
       webhookSecret,
@@ -271,11 +326,11 @@ export const upsert = mutation({
       ownerKey: principal.ownerKey,
       workflowId,
       version: 1,
-      name: args.name,
-      description: args.description,
-      enabled: args.enabled,
-      nodes: args.nodes,
-      edges: args.edges,
+      name: normalizedArgs.name,
+      description: normalizedArgs.description,
+      enabled: normalizedArgs.enabled,
+      nodes: normalizedArgs.nodes,
+      edges: normalizedArgs.edges,
       createdAt: Date.now(),
     });
     await ctx.db.patch(workflowId, { currentVersionId });

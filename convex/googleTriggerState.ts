@@ -17,7 +17,7 @@ export const listEnabled = internalQuery({
       const nodes = published?.workflowId === workflow._id ? published.nodes : workflow.nodes;
       const states = (workflow.googleTriggerState ?? {}) as Record<string, unknown>;
       return (nodes as Array<{ id: string; data: { nodeType: string; config: Record<string, unknown> } }>).flatMap((node) => {
-        if (!triggerTypes.has(node.data.nodeType) || node.data.config.executionMode !== "live") return [];
+        if (!triggerTypes.has(node.data.nodeType)) return [];
         const connectionRef = String(node.data.config.connectionRef ?? "");
         if (!connectionRef) return [];
         return [{

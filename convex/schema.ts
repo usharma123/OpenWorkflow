@@ -98,6 +98,23 @@ export default defineSchema({
     partialOutput: v.optional(v.string()),
     output: v.optional(v.any()),
     error: v.optional(v.string()),
+    plan: v.optional(
+      v.object({
+        steps: v.array(
+          v.object({
+            title: v.string(),
+            status: v.union(
+              v.literal("pending"),
+              v.literal("active"),
+              v.literal("done"),
+              v.literal("skipped"),
+            ),
+          }),
+        ),
+        status: v.union(v.literal("proposed"), v.literal("approved"), v.literal("rejected")),
+        note: v.optional(v.string()),
+      }),
+    ),
     startedAt: v.number(),
     completedAt: v.optional(v.number()),
   }).index("by_run", ["runId"]),
@@ -170,6 +187,34 @@ export default defineSchema({
     .index("by_dedupe_key", ["dedupeKey"])
     .index("by_workflow", ["workflowId"])
     .index("by_created_at", ["createdAt"]),
+
+  buildChatMessages: defineTable({
+    ownerKey: v.string(),
+    workflowExternalId: v.string(),
+    role: v.union(v.literal("user"), v.literal("assistant")),
+    content: v.string(),
+    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("failed")),
+    proposal: v.optional(
+      v.object({
+        name: v.optional(v.string()),
+        description: v.optional(v.string()),
+        nodes: v.array(v.any()),
+        edges: v.array(v.any()),
+      }),
+    ),
+    questions: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          prompt: v.string(),
+          allowMultiple: v.optional(v.boolean()),
+          options: v.array(v.object({ id: v.string(), label: v.string() })),
+        }),
+      ),
+    ),
+    appliedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_owner_workflow", ["ownerKey", "workflowExternalId"]),
 
   runClaims: defineTable({
     workflowId: v.id("workflows"),

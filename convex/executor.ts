@@ -2,9 +2,12 @@ import { WorkflowManager } from "@convex-dev/workflow";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from "./openrouterStream";
-import { applyApprovalDecision } from "./policies";
-import { renderTemplate, valueAtPath } from "./template";
+import {
+  agentUsesCompute,
+  defaultComputeSystemPrompt,
+  defaultMaxToolRounds,
+  parsePlanSteps,
+} from "../shared/agentTools";
 import {
   inputPacketsForNode,
   inputValueForPackets,
@@ -16,6 +19,10 @@ import {
   type ExecutionPacket,
 } from "../shared/executionGraph";
 import { stepRetryPolicy } from "../shared/reliability";
+import { clampSearchResultCount } from "../shared/webSearch";
+import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from "./openrouterStream";
+import { applyApprovalDecision } from "./policies";
+import { renderTemplate, valueAtPath } from "./template";
 
 export const workflow = new WorkflowManager(components.workflow);
 
@@ -29,9 +36,22 @@ type WorkflowEdge = { source: string; target: string; sourceHandle?: string | nu
 
 const connectorProviders: Record<string, string> = {
   gmailTrigger: "gmail",
+  gmailSend: "gmail",
   googleDoc: "google-docs",
+  calendarEvent: "google-calendar",
+  sheetsAppend: "google-sheets",
+  driveUpload: "google-drive",
   slack: "slack",
 };
+
+const connectorNodeTypes = new Set([
+  "gmailTrigger", "googleDoc", "gmailSend", "calendarEvent", "sheetsAppend", "driveUpload", "slack",
+]);
+
+/* Live writes to external systems are never retried automatically: a retry could send twice. */
+const nonIdempotentWriteNodeTypes = new Set([
+  "googleDoc", "slack", "gmailSend", "calendarEvent", "sheetsAppend", "driveUpload",
+]);
 
 const daytonaNodeTypes = new Set(["code", "shell", "git"]);
 
@@ -150,6 +170,84 @@ export const finishStep = internalMutation({
   },
 });
 
+const planStepStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("active"),
+  v.literal("done"),
+  v.literal("skipped"),
+);
+
+/** Record the proposed plan and pause the step (and run) for user review. */
+export const proposeStepPlan = internalMutation({
+  args: { stepRunId: v.id("stepRuns"), steps: v.array(v.string()) },
+  handler: async (ctx, { stepRunId, steps }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    if (!stepRun) throw new Error("Workflow step not found.");
+    await ctx.db.patch(stepRunId, {
+      status: "waiting",
+      plan: {
+        steps: steps.map((title) => ({ title, status: "pending" as const })),
+        status: "proposed" as const,
+      },
+    });
+    await ctx.db.patch(stepRun.runId, { status: "waiting" });
+  },
+});
+
+/** Apply the user's plan decision: resume with (possibly edited) steps, or record the rejection. */
+export const applyPlanDecision = internalMutation({
+  args: {
+    stepRunId: v.id("stepRuns"),
+    approved: v.boolean(),
+    steps: v.optional(v.array(v.string())),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, { stepRunId, approved, steps, note }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    if (!stepRun) throw new Error("Workflow step not found.");
+    if (!approved) {
+      await ctx.db.patch(stepRunId, {
+        plan: {
+          steps: stepRun.plan?.steps ?? [],
+          status: "rejected" as const,
+          ...(note ? { note } : {}),
+        },
+      });
+      return;
+    }
+    const edited = (steps ?? []).map((title) => title.trim()).filter(Boolean);
+    const finalTitles = edited.length
+      ? parsePlanSteps(edited)
+      : (stepRun.plan?.steps ?? []).map((planStep) => planStep.title);
+    await ctx.db.patch(stepRunId, {
+      status: "running",
+      plan: {
+        steps: finalTitles.map((title) => ({ title, status: "pending" as const })),
+        status: "approved" as const,
+        ...(note ? { note } : {}),
+      },
+    });
+    await ctx.db.patch(stepRun.runId, { status: "running" });
+  },
+});
+
+/** Live checklist updates from the executing agent's mark_plan_step tool. */
+export const updateStepPlanProgress = internalMutation({
+  args: {
+    stepRunId: v.id("stepRuns"),
+    stepIndex: v.number(),
+    status: planStepStatusValidator,
+  },
+  handler: async (ctx, { stepRunId, stepIndex, status }) => {
+    const stepRun = await ctx.db.get(stepRunId);
+    if (!stepRun?.plan || stepRun.status !== "running") return;
+    const steps = [...stepRun.plan.steps];
+    if (stepIndex < 0 || stepIndex >= steps.length) return;
+    steps[stepIndex] = { ...steps[stepIndex], status };
+    await ctx.db.patch(stepRunId, { plan: { ...stepRun.plan, steps } });
+  },
+});
+
 export const updateStepPartialOutput = internalMutation({
   args: { stepRunId: v.id("stepRuns"), partialOutput: v.string() },
   handler: async (ctx, { stepRunId, partialOutput }) => {
@@ -211,10 +309,7 @@ export const executeNode = internalAction({
     const typedNode = node as WorkflowNode;
     const { nodeType, config } = typedNode.data;
 
-    const executionMode = String(config.executionMode ?? "demo");
-    const connectionRef = String(config.connectionRef ?? "");
-
-    if (executionMode === "live" && ["gmailTrigger", "googleDoc", "slack"].includes(nodeType)) {
+    if (connectorNodeTypes.has(nodeType)) {
       return ctx.runAction(internal.connectorExecution.executeLiveConnector, {
         node,
         input,
@@ -222,22 +317,6 @@ export const executeNode = internalAction({
         ownerKey,
         ownerUserId,
       });
-    }
-
-    if (nodeType === "gmailTrigger") {
-      if (executionMode === "demo") {
-        return {
-          messages: [
-            { from: "Maya Chen · Finance", subject: "Q3 forecast needs sign-off", snippet: "Please approve the revised hiring assumptions before Thursday." },
-            { from: "Jordan Lee · Product", subject: "Launch readiness update", snippet: "The beta is on track; legal review is the only remaining dependency." },
-            { from: "Sam Rivera · Customer Success", subject: "Acme renewal risk", snippet: "Acme asked for an executive sponsor before next week's renewal call." },
-          ],
-          count: 3,
-          date: new Date().toLocaleDateString("en-US"),
-          source: "sample",
-        };
-      }
-      throw new Error("Connected Gmail must use a user-owned Google connection.");
     }
 
     if (nodeType.endsWith("Trigger") || nodeType === "output") return input;
@@ -275,6 +354,16 @@ export const executeNode = internalAction({
       return { passed, value: actual };
     }
 
+    if (nodeType === "webSearch") {
+      const query = renderTemplate(String(config.query ?? ""), input, stepOutputs).trim();
+      if (!query) throw new Error("Add a search query before running this step.");
+      return ctx.runAction(internal.searchExecution.search, {
+        query,
+        numResults: clampSearchResultCount(config.numResults),
+        includeText: config.includeText !== false,
+      });
+    }
+
     if (nodeType === "http") {
       const url = new URL(renderTemplate(String(config.url ?? ""), input, stepOutputs));
       if (url.protocol !== "https:" || isPrivateHost(url.hostname)) {
@@ -306,6 +395,29 @@ export const executeNode = internalAction({
     if (nodeType === "ai") {
       const apiKey = process.env.OPENROUTER_API_KEY;
       if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured in Convex.");
+      const userPrompt = renderTemplate(String(config.prompt ?? "{{input}}"), input, stepOutputs);
+
+      if (agentUsesCompute(config)) {
+        if (!stepRunId) throw new Error("Agent steps require a step run id.");
+        const result = await ctx.runAction(internal.agentExecution.runAgent, {
+          model: String(config.model ?? "openai/gpt-5.6-luna"),
+          systemPrompt: String(config.systemPrompt ?? "").trim() || defaultComputeSystemPrompt(),
+          userPrompt,
+          input,
+          maxToolRounds: Math.min(
+            20,
+            Math.max(1, Math.trunc(Number(config.maxToolRounds ?? defaultMaxToolRounds()))),
+          ),
+          timeoutSeconds: Math.min(900, Math.max(30, Math.trunc(Number(config.timeoutSeconds ?? 300)))),
+          stepRunId,
+        });
+        return {
+          ...(input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}),
+          ...result,
+        };
+      }
+
+      // Lightweight completion without sandbox compute (optional OpenRouter web search).
       const tools = config.webSearch
         ? [{
             type: "openrouter:web_search",
@@ -328,7 +440,7 @@ export const executeNode = internalAction({
           model: String(config.model ?? "openai/gpt-5.6-luna"),
           messages: [
             { role: "system", content: String(config.systemPrompt ?? "You are a helpful assistant.") },
-            { role: "user", content: renderTemplate(String(config.prompt ?? "{{input}}"), input, stepOutputs) },
+            { role: "user", content: userPrompt },
           ],
           tools,
           stream: true,
@@ -379,21 +491,6 @@ export const executeNode = internalAction({
         citations: streamState.annotations,
         usage: streamState.usage,
       };
-    }
-
-    if (nodeType === "googleDoc") {
-      const content = typeof input === "object" && input && typeof (input as Record<string, unknown>).content === "string" ? String((input as Record<string, unknown>).content) : JSON.stringify(input, null, 2);
-      const title = renderTemplate(String(config.title ?? "OpenWorkflow brief"), input, stepOutputs);
-      if (executionMode === "demo") return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), documentTitle: title, documentUrl: "https://docs.google.com/document/d/demo-openworkflow-inbox-brief/edit", documentMode: "demo" };
-      throw new Error("Connected Google Docs must use a user-owned Google connection.");
-    }
-
-    if (nodeType === "slack") {
-      const configuredChannel = String(config.channel ?? "#leadership-updates");
-      const channel = configuredChannel;
-      const message = renderTemplate(String(config.message ?? "{{input.documentUrl}}"), input, stepOutputs);
-      if (executionMode === "demo") return { ...(input && typeof input === "object" ? input as Record<string, unknown> : {}), delivery: { provider: "slack", channel, message, status: "simulated" } };
-      throw new Error("Connected Slack must use a user-owned workspace connection.");
     }
 
     throw new Error(`Unsupported workflow block: ${nodeType}`);
@@ -482,13 +579,66 @@ export const executeWorkflow = workflow
             });
             sandboxIdsByBoundary.set(boundary.id, result.sandboxId);
             outputs.set(node.id, packetForNodeOutput(node, result.output));
+          } else if (nodeType === "ai" && agentUsesCompute(config) && config.planFirst === true) {
+            // Plan-first agent: Luna proposes a plan, the run pauses for review,
+            // then the approved (possibly edited) plan is executed.
+            const stepOutputs = Object.fromEntries(
+              [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
+            );
+            const model = String(config.model ?? "openai/gpt-5.6-luna");
+            const systemPrompt = String(config.systemPrompt ?? "").trim() || defaultComputeSystemPrompt();
+            const userPrompt = renderTemplate(String(config.prompt ?? "{{input}}"), value, stepOutputs);
+            const proposedSteps: string[] = await step.runAction(internal.agentExecution.generatePlan, {
+              model,
+              systemPrompt,
+              userPrompt,
+              stepRunId,
+            });
+            await step.runMutation(internal.executor.proposeStepPlan, { stepRunId, steps: proposedSteps });
+            const decision = await step.awaitEvent({
+              name: `plan:${node.id}`,
+              validator: v.object({
+                approved: v.boolean(),
+                steps: v.optional(v.array(v.string())),
+                note: v.optional(v.string()),
+              }),
+            });
+            await step.runMutation(internal.executor.applyPlanDecision, {
+              stepRunId,
+              approved: decision.approved,
+              ...(decision.steps ? { steps: decision.steps } : {}),
+              ...(decision.note ? { note: decision.note } : {}),
+            });
+            if (!decision.approved) {
+              throw new Error(decision.note?.trim() || "The research plan was rejected.");
+            }
+            const edited = (decision.steps ?? []).map((title) => title.trim()).filter(Boolean);
+            const approvedSteps = edited.length ? parsePlanSteps(edited) : proposedSteps;
+            const result = await step.runAction(internal.agentExecution.runAgent, {
+              model,
+              systemPrompt,
+              userPrompt,
+              input: value,
+              maxToolRounds: Math.min(
+                20,
+                Math.max(1, Math.trunc(Number(config.maxToolRounds ?? defaultMaxToolRounds()))),
+              ),
+              timeoutSeconds: Math.min(900, Math.max(30, Math.trunc(Number(config.timeoutSeconds ?? 300)))),
+              stepRunId,
+              plan: approvedSteps,
+            });
+            const output = {
+              ...(value && typeof value === "object" && !Array.isArray(value)
+                ? (value as Record<string, unknown>)
+                : {}),
+              ...(result as Record<string, unknown>),
+            };
+            outputs.set(node.id, packetForNodeOutput(node, output));
           } else {
             const stepOutputs = Object.fromEntries(
               [...outputs.entries()].map(([nodeId, packet]) => [nodeId, packet.value]),
             );
-            const isNonIdempotentLiveWrite =
-              String(config.executionMode ?? "demo") === "live" &&
-              (nodeType === "googleDoc" || nodeType === "slack");
+            const isNonIdempotentLiveWrite = nonIdempotentWriteNodeTypes.has(nodeType);
             const { retryAttempts, retryBackoffMs } = stepRetryPolicy(config);
             const output = await step.runAction(
               internal.executor.executeNode,

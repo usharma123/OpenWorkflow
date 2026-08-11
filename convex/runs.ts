@@ -6,6 +6,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { requirePrincipal } from "./auth";
 import { workflowConcurrencyLimit } from "../shared/reliability";
+import { MAX_PLAN_STEPS } from "../shared/agentTools";
 
 export async function ensureWorkflowVersion(ctx: MutationCtx, definition: Doc<"workflows">) {
   if (definition.currentVersionId) {
@@ -219,6 +220,64 @@ export const retry = mutation({
       createdAt: Date.now(),
     });
     return retryRunId;
+  },
+});
+
+export const decidePlan = mutation({
+  args: {
+    runId: v.id("workflowRuns"),
+    nodeId: v.string(),
+    approved: v.boolean(),
+    steps: v.optional(v.array(v.string())),
+    note: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const principal = await requirePrincipal(ctx);
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.ownerKey !== principal.ownerKey) throw new Error("Run not found.");
+    if (!run.workflowEngineId || run.status !== "waiting") {
+      throw new Error("This run is not waiting for a plan review.");
+    }
+    const waitingStep = (await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", args.runId)).collect())
+      .find(
+        (step) =>
+          step.nodeId === args.nodeId &&
+          step.status === "waiting" &&
+          step.plan?.status === "proposed" &&
+          step.ownerKey === principal.ownerKey,
+      );
+    if (!waitingStep) throw new Error("This plan review is no longer pending.");
+    const steps = (args.steps ?? [])
+      .map((title) => title.trim().slice(0, 300))
+      .filter(Boolean)
+      .slice(0, MAX_PLAN_STEPS);
+    await sendEvent(ctx, components.workflow, {
+      name: `plan:${args.nodeId}`,
+      workflowId: run.workflowEngineId,
+      value: {
+        approved: args.approved,
+        ...(steps.length ? { steps } : {}),
+        ...(args.note?.trim() ? { note: args.note.trim() } : {}),
+      },
+      validator: v.object({
+        approved: v.boolean(),
+        steps: v.optional(v.array(v.string())),
+        note: v.optional(v.string()),
+      }),
+    });
+    await ctx.db.insert("auditLogs", {
+      ownerKey: principal.ownerKey,
+      actorUserId: principal.userId,
+      runId: args.runId,
+      stepRunId: waitingStep._id,
+      event: "plan.decision",
+      outcome: args.approved ? "approved" : "rejected",
+      actor: principal.userId,
+      detail: args.note?.slice(0, 300),
+      createdAt: Date.now(),
+    });
+    return null;
   },
 });
 
