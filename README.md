@@ -8,7 +8,7 @@ Gmail, Google Docs, and Slack are included integrations—not the product bounda
 Gmail inbox → GPT-5.6 Luna via OpenRouter → Google Doc → human approval → Slack
 ```
 
-Safe demo mode is explicit and remains the default. Connected mode uses each signed-in user's approved Google or Slack connection; there are no shared bootstrap tokens.
+Connector steps use each signed-in user's approved Google or Slack connection. Compatible steps automatically select an active account, and execution fails clearly when no valid account is available; there are no shared bootstrap tokens or simulated connector results. Google Doc steps parse Markdown output into native headings, lists, links, emphasis, code styling, and readable table rows before saving.
 
 ## Implemented security model
 
@@ -144,7 +144,7 @@ bunx convex env set OPENROUTER_APP_NAME OpenWorkflow
 bunx convex env set OPENROUTER_SITE_URL http://localhost:5173
 ```
 
-The key stays in Convex. Browser safe demo mode does not call OpenRouter; Convex-backed runs do.
+The key stays in Convex. Workflow execution requires the Convex backend and calls OpenRouter only from server-side actions.
 OpenRouter responses are consumed as SSE streams. The current model text is patched to the active
 step at most once every 200ms so the run transcript updates live without creating a write per token.
 
