@@ -1,0 +1,25 @@
+{
+  "ignore": {
+    "overrides": [
+      {
+        "files": [
+          "convex/_generated/server.js",
+          "convex/auth.ts",
+          "convex/connectionActions.ts",
+          "convex/connections.ts",
+          "convex/connectorExecution.ts",
+          "convex/crons.ts",
+          "convex/daytonaExecution.ts",
+          "convex/executor.ts",
+          "convex/http.ts",
+          "convex/runs.ts",
+          "convex/schedules.ts",
+          "convex/secretCrypto.ts",
+          "convex/webhooks.ts",
+          "convex/workflows.ts"
+        ],
+        "rules": ["deslop/unused-file"]
+      }
+    ]
+  }
+}
