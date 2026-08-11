@@ -4,9 +4,17 @@ import {
   CircleAlert,
   Clipboard,
   ExternalLink,
+  FileText,
+  GitBranch,
+  Globe,
   MessageSquare,
+  Package,
   Play,
   RotateCcw,
+  Search,
+  Terminal,
+  Users,
+  Wrench,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -15,6 +23,7 @@ import type {
   PendingPlanReview,
   RunStepPlan,
   RunStepSummary,
+  RunToolTraceEntry,
   WorkflowNodeType,
 } from "../types";
 import { NodeMark } from "./icons";
@@ -201,29 +210,198 @@ function ToolCallRow({ step }: { step: RunStepSummary }) {
   );
 }
 
-/* Live checklist for an approved plan while the agent executes it. */
-function PlanChecklist({ plan }: { plan: RunStepPlan }) {
+/* --- Agent activity (tool trace) grouped under the plan checklist --- */
+
+interface TraceRow {
+  tool: string;
+  summary: string;
+  ok: boolean;
+  subagent?: string;
+  stepIndex?: number;
+}
+
+const TOOL_ICONS: Record<string, typeof Search> = {
+  web_search: Search,
+  fetch_url: Globe,
+  run_code: Terminal,
+  run_shell: Terminal,
+  read_file: FileText,
+  write_file: FileText,
+  clone_repo: GitBranch,
+  publish_artifact: Package,
+  spawn_subagents: Users,
+};
+
+/* Normalize persisted or streamed trace entries; `[name] ` prefixes become badges. */
+function parseTrace(raw: unknown): TraceRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const entry = record(item);
+    const rawSummary = typeof entry.summary === "string" ? entry.summary : "";
+    if (!rawSummary) return [];
+    const prefix = /^\[([^\]]{1,60})\]\s+/.exec(rawSummary);
+    return [
+      {
+        tool: typeof entry.tool === "string" ? entry.tool : "",
+        summary: prefix ? rawSummary.slice(prefix[0].length) : rawSummary,
+        ok: entry.ok !== false,
+        subagent: prefix?.[1],
+        stepIndex: typeof entry.stepIndex === "number" ? entry.stepIndex : undefined,
+      },
+    ];
+  });
+}
+
+/* Which plan step a mark_plan_step entry refers to; older runs fall back to the summary text. */
+function markerStepIndex(entry: TraceRow): number | undefined {
+  if (entry.tool !== "mark_plan_step") return undefined;
+  if (entry.stepIndex !== undefined) return entry.stepIndex;
+  const match = /plan step (\d+)/.exec(entry.summary);
+  return match ? Number(match[1]) - 1 : -1;
+}
+
+/* Split the trace into activity per plan step. Markers set the boundary and are not rows. */
+function bucketTrace(trace: TraceRow[], stepCount: number): { setup: TraceRow[]; steps: TraceRow[][] } {
+  const setup: TraceRow[] = [];
+  const steps: TraceRow[][] = Array.from({ length: stepCount }, () => []);
+  let current = -1;
+  for (const entry of trace) {
+    const marker = markerStepIndex(entry);
+    if (marker !== undefined) {
+      if (marker >= 0 && marker < stepCount) current = marker;
+      continue;
+    }
+    if (current >= 0 && current < stepCount) steps[current].push(entry);
+    else setup.push(entry);
+  }
+  return { setup, steps };
+}
+
+function PlanStepMark({ status }: { status: RunStepPlan["steps"][number]["status"] }) {
+  if (status === "done") return <Check size={12} />;
+  if (status === "active") return <span className="dot dot-running" />;
+  if (status === "skipped") return <span aria-hidden="true">—</span>;
+  return <span className="dot" />;
+}
+
+function ActivityList({ rows, live }: { rows: TraceRow[]; live?: boolean }) {
+  return (
+    <ul className="tx-activity">
+      {rows.map((row, index) => {
+        const Icon = TOOL_ICONS[row.tool] ?? Wrench;
+        const isNewest = live && index === rows.length - 1;
+        return (
+          <li
+            key={`${index}-${row.summary.slice(0, 40)}`}
+            className={`tx-activity-row${row.ok ? "" : " is-failed"}${isNewest ? " is-live" : ""}`}
+          >
+            <Icon size={13} aria-hidden="true" />
+            {row.subagent && <span className="tx-activity-badge">{row.subagent}</span>}
+            <span className="tx-activity-text">{row.summary}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/* One collapsible group of activity rows with a count affordance. */
+function ActivityGroup({
+  label,
+  labelClass,
+  mark,
+  rows,
+  defaultOpen,
+  live,
+}: {
+  label: string;
+  labelClass?: string;
+  mark: React.ReactNode;
+  rows: TraceRow[];
+  defaultOpen: boolean;
+  live?: boolean;
+}) {
+  const [override, setOverride] = useState<boolean | undefined>(undefined);
+  const open = override ?? defaultOpen;
+  const failed = rows.filter((row) => !row.ok).length;
+  const hasRows = rows.length > 0;
+  return (
+    <li className={labelClass}>
+      <button
+        type="button"
+        className="tx-plan-row"
+        onClick={() => setOverride(!open)}
+        disabled={!hasRows}
+        aria-expanded={hasRows ? open : undefined}
+      >
+        <span className="tx-plan-mark">{mark}</span>
+        <span className="tx-plan-title">{label}</span>
+        {hasRows && (
+          <span className={`tx-plan-count${failed ? " is-failed" : ""}`}>
+            {rows.length} action{rows.length === 1 ? "" : "s"}
+            {failed ? ` · ${failed} failed` : ""}
+          </span>
+        )}
+        {hasRows && <ChevronRight className={`tx-caret ${open ? "is-open" : ""}`} size={12} />}
+      </button>
+      {hasRows && open && <ActivityList rows={rows} live={live} />}
+    </li>
+  );
+}
+
+/*
+ * The plan checklist with each step's tool activity nested beneath it.
+ * The active step is expanded and streams live; finished steps collapse to a count.
+ */
+function PlanActivity({ plan, trace, live }: { plan: RunStepPlan; trace: TraceRow[]; live: boolean }) {
+  const { setup, steps } = bucketTrace(trace, plan.steps.length);
   return (
     <div className="tx-plan">
       <span className="t-eyebrow">Plan</span>
       <ol className="tx-plan-list">
-        {plan.steps.map((planStep) => (
-          <li key={planStep.title} className={`is-${planStep.status}`}>
-            <span className="tx-plan-mark">
-              {planStep.status === "done" ? (
-                <Check size={12} />
-              ) : planStep.status === "active" ? (
-                <span className="dot dot-running" />
-              ) : planStep.status === "skipped" ? (
-                <span aria-hidden="true">—</span>
-              ) : (
-                <span className="dot" />
-              )}
-            </span>
-            <span className="tx-plan-title">{planStep.title}</span>
-          </li>
+        {setup.length > 0 && (
+          <ActivityGroup
+            label="Setup"
+            labelClass="is-setup"
+            mark={<Wrench size={11} aria-hidden="true" />}
+            rows={setup}
+            defaultOpen={false}
+          />
+        )}
+        {plan.steps.map((planStep, index) => (
+          <ActivityGroup
+            key={`${index}-${planStep.title}`}
+            label={planStep.title}
+            labelClass={`is-${planStep.status}`}
+            mark={<PlanStepMark status={planStep.status} />}
+            rows={steps[index] ?? []}
+            defaultOpen={planStep.status === "active"}
+            live={live && planStep.status === "active"}
+          />
         ))}
       </ol>
+    </div>
+  );
+}
+
+const ACTIVITY_PREVIEW_COUNT = 6;
+
+/* Standalone activity card for agent runs without a plan. */
+function ActivityCard({ trace, live }: { trace: TraceRow[]; live: boolean }) {
+  const [showAll, setShowAll] = useState(false);
+  const rows = trace.filter((row) => row.tool !== "mark_plan_step");
+  if (!rows.length) return null;
+  const hidden = showAll ? 0 : Math.max(0, rows.length - ACTIVITY_PREVIEW_COUNT);
+  const visible = hidden ? rows.slice(hidden) : rows;
+  return (
+    <div className="tx-plan tx-activity-card">
+      <span className="t-eyebrow">Activity</span>
+      {hidden > 0 && (
+        <button type="button" className="link-btn tx-activity-more" onClick={() => setShowAll(true)}>
+          Show all {rows.length}
+        </button>
+      )}
+      <ActivityList rows={visible} live={live} />
     </div>
   );
 }
@@ -329,16 +507,10 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
   const out = record(step.output);
   const content = typeof out.content === "string" ? out.content : step.partialOutput ?? "";
   const citations = useMemo(() => citationsOf(step.output), [step.output]);
-  const toolTrace = useMemo(() => {
-    const raw = out.toolTrace;
-    if (!Array.isArray(raw)) return [];
-    return raw.flatMap((item) => {
-      const entry = record(item);
-      const summary = typeof entry.summary === "string" ? entry.summary : "";
-      if (!summary) return [];
-      return [{ summary, ok: entry.ok !== false }];
-    });
-  }, [out.toolTrace]);
+  const trace = useMemo(
+    () => parseTrace(Array.isArray(out.toolTrace) ? out.toolTrace : step.partialToolTrace),
+    [out.toolTrace, step.partialToolTrace],
+  );
   const artifacts = useMemo(() => {
     const raw = out.artifacts;
     if (!Array.isArray(raw)) return [];
@@ -395,16 +567,10 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
         )}
       </div>
 
-      {step.plan && step.plan.status !== "rejected" && <PlanChecklist plan={step.plan} />}
-
-      {toolTrace.length > 0 && (
-        <ul className="tx-tool-trace">
-          {toolTrace.map((entry) => (
-            <li key={entry.summary} className={entry.ok ? undefined : "is-failed"}>
-              {entry.summary}
-            </li>
-          ))}
-        </ul>
+      {step.plan && step.plan.status !== "rejected" ? (
+        <PlanActivity plan={step.plan} trace={trace} live={step.status === "running"} />
+      ) : (
+        trace.length > 0 && <ActivityCard trace={trace} live={step.status === "running"} />
       )}
 
       {subagents.length > 0 && (

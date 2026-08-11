@@ -252,11 +252,28 @@ export const updateStepPlanProgress = internalMutation({
 });
 
 export const updateStepPartialOutput = internalMutation({
-  args: { stepRunId: v.id("stepRuns"), partialOutput: v.string() },
-  handler: async (ctx, { stepRunId, partialOutput }) => {
+  args: {
+    stepRunId: v.id("stepRuns"),
+    partialOutput: v.string(),
+    toolTrace: v.optional(
+      v.array(
+        v.object({
+          tool: v.string(),
+          summary: v.string(),
+          ok: v.boolean(),
+          stepIndex: v.optional(v.number()),
+          stepStatus: v.optional(v.string()),
+        }),
+      ),
+    ),
+  },
+  handler: async (ctx, { stepRunId, partialOutput, toolTrace }) => {
     const stepRun = await ctx.db.get(stepRunId);
     if (!stepRun || stepRun.status !== "running") return;
-    await ctx.db.patch(stepRunId, { partialOutput });
+    await ctx.db.patch(stepRunId, {
+      partialOutput,
+      ...(toolTrace ? { partialToolTrace: toolTrace } : {}),
+    });
   },
 });
 

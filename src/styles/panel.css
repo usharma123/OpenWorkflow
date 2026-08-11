@@ -286,6 +286,9 @@
 
 .chip {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 1px solid var(--line);
   background: var(--surface-2, var(--bg-2));
   color: var(--text);
@@ -315,23 +318,89 @@
 /* Build-chat clarifying questions */
 .chat-questions {
   margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--ink-0);
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
-.chat-question > p {
-  margin: 0 0 2px;
+.chat-questions-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.chat-questions.is-answered {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.chat-question-prompt {
+  margin: 0;
+  font-size: 12.5px;
   font-weight: 500;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-question-num {
+  font-size: 10.5px;
+  color: var(--ink-6);
+}
+
+.chat-question-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
 }
 
 .chat-question .chip-row {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
 }
 
-.chat-questions > .btn {
-  align-self: flex-start;
-  margin-top: 2px;
+.chat-question-other {
+  margin-top: 6px;
+  width: 100%;
+  padding: 5px 9px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.chat-question-other::placeholder {
+  color: var(--text-muted);
+}
+
+.chat-question-other:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--ink-6);
+}
+
+.chat-questions-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.chat-questions-progress {
+  font-size: 11.5px;
+  color: var(--text-muted);
 }
 
 .mapper-heading {
@@ -751,25 +820,77 @@
   margin-left: auto;
 }
 
-.tx-tool-trace {
+/* Agent activity rows nested under the plan checklist (or a standalone card) */
+.tx-activity {
   list-style: none;
-  margin: 0 0 10px;
-  padding: 0;
+  margin: 2px 0 4px;
+  /* Aligns with the step title: row padding (4) + mark (14) + gap (8). */
+  padding: 0 0 0 26px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
-.tx-tool-trace li {
+.tx-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
   font-size: 12px;
   color: var(--ink-6);
-  padding: 4px 8px;
-  border-left: 2px solid var(--line);
+  min-width: 0;
 }
 
-.tx-tool-trace li.is-failed {
+.tx-activity-row > svg {
+  flex: none;
+  align-self: center;
+  color: var(--ink-6);
+  opacity: 0.8;
+}
+
+.tx-activity-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tx-activity-row.is-failed,
+.tx-activity-row.is-failed > svg {
   color: var(--danger, #b42318);
-  border-left-color: var(--danger, #b42318);
+  opacity: 1;
+}
+
+.tx-activity-row.is-live .tx-activity-text {
+  background: linear-gradient(90deg, var(--ink-7) 20%, var(--ink-10) 50%, var(--ink-7) 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+
+.tx-activity-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-secondary);
+  background: var(--surface-3, var(--bg-3));
+  white-space: nowrap;
+}
+
+.tx-activity-card {
+  position: relative;
+}
+
+.tx-activity-card > .tx-activity {
+  padding-left: 2px;
+}
+
+.tx-activity-more {
+  position: absolute;
+  top: 8px;
+  right: 10px;
 }
 
 .tx-artifacts {
@@ -942,15 +1063,66 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .tx-plan-list li {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+/* Each plan step is a row button that toggles its nested activity. */
+.tx-plan-row {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.tx-plan-row:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.tx-plan-row:disabled {
+  cursor: default;
+}
+
+.tx-plan-row .tx-plan-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.tx-plan-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-6);
+  white-space: nowrap;
+}
+
+.tx-plan-count.is-failed {
+  color: var(--danger, #b42318);
+}
+
+.tx-plan-row .tx-caret {
+  align-self: center;
+}
+
+.tx-plan-list li.is-setup .tx-plan-title,
+.tx-plan-list li.is-setup .tx-plan-mark {
+  color: var(--ink-6);
 }
 
 .tx-plan-list li.is-done .tx-plan-title {

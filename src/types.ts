@@ -77,6 +77,15 @@ export interface RunStepPlan {
   note?: string;
 }
 
+/** One agent tool call, streamed while the step runs and persisted in its output. */
+export interface RunToolTraceEntry {
+  tool?: string;
+  summary: string;
+  ok: boolean;
+  stepIndex?: number;
+  stepStatus?: string;
+}
+
 export interface RunStepSummary {
   id: string;
   nodeId: string;
@@ -86,6 +95,7 @@ export interface RunStepSummary {
   startedAt: number;
   completedAt?: number;
   partialOutput?: string;
+  partialToolTrace?: RunToolTraceEntry[];
   output?: unknown;
   error?: string;
   plan?: RunStepPlan;

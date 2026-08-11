@@ -312,13 +312,12 @@ async function patchPartial(
   content: string,
   toolTrace: AgentToolTraceEntry[],
 ) {
-  const lines = toolTrace.map((entry) => `- ${entry.summary}${entry.ok ? "" : " (failed)"}`);
-  const partial = [content.trim(), lines.length ? `\n\nTools so far:\n${lines.join("\n")}` : ""]
-    .join("")
-    .slice(-100_000);
+  // The structured trace streams alongside the text so the transcript can render
+  // live activity rows instead of a "Tools so far" text dump.
   await ctx.runMutation(internal.executor.updateStepPartialOutput, {
     stepRunId,
-    partialOutput: partial,
+    partialOutput: content.trim().slice(-100_000),
+    toolTrace: toolTrace.slice(-200),
   });
 }
 
@@ -418,7 +417,14 @@ async function runToolLoop(options: {
       }
 
       const summary = toolTraceSummary((name as AgentToolName) || "run_code", validatedArgs, ok);
-      toolTrace.push({ tool: (name as AgentToolName) || "run_code", summary, ok });
+      const planMarker =
+        name === "mark_plan_step" && ok
+          ? {
+              stepIndex: Math.trunc(Number(validatedArgs.stepIndex)),
+              stepStatus: String(validatedArgs.status) as "active" | "done" | "skipped",
+            }
+          : {};
+      toolTrace.push({ tool: (name as AgentToolName) || "run_code", summary, ok, ...planMarker });
       messages.push({
         role: "tool",
         tool_call_id: call.id,

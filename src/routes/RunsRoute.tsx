@@ -75,8 +75,10 @@ export function RunsRoute() {
             startedAt: step.startedAt,
             completedAt: step.completedAt,
             partialOutput: step.partialOutput,
+            partialToolTrace: step.partialToolTrace,
             output: step.output,
             error: step.error,
+            plan: step.plan,
           }));
           const result: LatestRunResult = {
             id: run._id,

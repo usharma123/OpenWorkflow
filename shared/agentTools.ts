@@ -42,6 +42,9 @@ export interface AgentToolTraceEntry {
   tool: AgentToolName;
   summary: string;
   ok: boolean;
+  /** Set on mark_plan_step entries so the UI can group activity by plan step. */
+  stepIndex?: number;
+  stepStatus?: "active" | "done" | "skipped";
 }
 
 /** Full tool belt when Use compute is on — the model decides what to call. */
@@ -626,37 +629,60 @@ export function toolTraceSummary(
   args: Record<string, unknown>,
   ok: boolean,
 ): string {
-  if (!ok) return `Failed: ${name}`;
+  /* Failure labels keep the argument context so "what failed" is visible in the UI.
+     Validation failures may leave args empty, so every detail degrades gracefully. */
   switch (name) {
-    case "web_search":
-      return `Searched “${String(args.query ?? "").slice(0, 80)}”`;
-    case "fetch_url":
-      return `Fetched ${String(args.url ?? "").slice(0, 100)}`;
-    case "run_code":
-      return `Ran ${String(args.language ?? "code")}`;
-    case "write_file":
-      return `Wrote ${String(args.path ?? "file")}`;
-    case "read_file":
-      return `Read ${String(args.path ?? "file")}`;
-    case "run_shell":
-      return `Shell: ${String(args.command ?? "").slice(0, 60)}`;
-    case "clone_repo":
-      return `Cloned repo`;
-    case "publish_artifact":
-      return `Published ${String(args.type ?? "artifact")}`;
+    case "web_search": {
+      const query = String(args.query ?? "").slice(0, 80);
+      const detail = query ? `“${query}”` : "";
+      return ok ? `Searched ${detail || "the web"}` : `Search failed${detail ? ` — ${detail}` : ""}`;
+    }
+    case "fetch_url": {
+      const url = String(args.url ?? "").slice(0, 100);
+      return ok ? `Fetched ${url || "page"}` : `Fetch failed${url ? ` — ${url}` : ""}`;
+    }
+    case "run_code": {
+      const language = String(args.language ?? "code");
+      return ok ? `Ran ${language}` : `${language === "code" ? "Code" : language} run failed`;
+    }
+    case "write_file": {
+      const path = String(args.path ?? "file");
+      return ok ? `Wrote ${path}` : `Write failed — ${path}`;
+    }
+    case "read_file": {
+      const path = String(args.path ?? "file");
+      return ok ? `Read ${path}` : `Read failed — ${path}`;
+    }
+    case "run_shell": {
+      const command = String(args.command ?? "").slice(0, 60);
+      return ok ? `Shell: ${command}` : `Shell failed${command ? ` — ${command}` : ""}`;
+    }
+    case "clone_repo": {
+      const repo = String(args.repositoryUrl ?? "").slice(0, 100);
+      return ok ? "Cloned repo" : `Clone failed${repo ? ` — ${repo}` : ""}`;
+    }
+    case "publish_artifact": {
+      const kind = String(args.type ?? "artifact");
+      return ok ? `Published ${kind}` : `Publish failed — ${kind}`;
+    }
     case "mark_plan_step": {
       const index = Number(args.stepIndex);
+      const label = Number.isFinite(index) ? `plan step ${index + 1}` : "plan step";
+      if (!ok) return `Could not update ${label}`;
       const status = String(args.status ?? "active");
       return status === "active"
-        ? `Started plan step ${index + 1}`
+        ? `Started ${label}`
         : status === "skipped"
-          ? `Skipped plan step ${index + 1}`
-          : `Finished plan step ${index + 1}`;
+          ? `Skipped ${label}`
+          : `Finished ${label}`;
     }
     case "spawn_subagents": {
       const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+      if (!ok) return "Subagents failed to start";
       return `Spawned ${tasks.length} subagent${tasks.length === 1 ? "" : "s"}`;
     }
+    default:
+      return ok ? `Ran ${name}` : `${name} failed`;
   }
 }
 

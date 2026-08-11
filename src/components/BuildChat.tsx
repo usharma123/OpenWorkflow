@@ -1,4 +1,4 @@
-import { Check, Loader2, Send, Sparkles } from "lucide-react";
+import { Check, Loader2, MessageCircleQuestion, Send, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   convexClient,
@@ -69,7 +69,12 @@ function ProposalCard({
 
 type BuildChatQuestions = NonNullable<BuildChatMessage["questions"]>;
 
-/* Option chips for the assistant's clarifying questions. One submission per round. */
+/*
+ * The assistant's clarifying questions: option chips plus an optional
+ * free-text answer per question. One submission per round; once the round
+ * passes, the card collapses to a compact "answered" line (the user's reply
+ * appears as the next chat message anyway).
+ */
 function QuestionsCard({
   questions,
   disabled,
@@ -80,6 +85,7 @@ function QuestionsCard({
   onSubmit: (answer: string) => void;
 }) {
   const [selected, setSelected] = useState<Record<string, string[]>>({});
+  const [freeText, setFreeText] = useState<Record<string, string>>({});
 
   const toggle = (question: BuildChatQuestions[number], optionId: string) => {
     setSelected((previous) => {
@@ -96,52 +102,91 @@ function QuestionsCard({
     });
   };
 
-  const answered = questions.flatMap((question) => {
+  const answers = questions.flatMap((question) => {
     const chosen = new Set(selected[question.id] ?? []);
-    if (chosen.size === 0) return [];
-    const labels = question.options.flatMap((option) => chosen.has(option.id) ? [option.label] : []);
-    return [{ prompt: question.prompt, labels }];
+    const labels = question.options.flatMap((option) => (chosen.has(option.id) ? [option.label] : []));
+    const extra = (freeText[question.id] ?? "").trim();
+    if (extra) labels.push(extra);
+    if (labels.length === 0) return [];
+    return [`${question.prompt} → ${labels.join(", ")}`];
   });
-  const compose = () =>
-    answered
-      .map((answer) => `${answer.prompt} → ${answer.labels.join(", ")}`)
-      .join("\n");
+  const answeredCount = answers.length;
+  const allAnswered = answeredCount === questions.length;
+
+  if (disabled) {
+    return (
+      <div className="chat-questions is-answered">
+        <MessageCircleQuestion size={13} aria-hidden="true" />
+        <span>
+          {questions.length === 1 ? "Question answered" : `${questions.length} questions answered`}
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div className="chat-questions">
-      {questions.map((question) => {
+      <div className="chat-questions-head">
+        <MessageCircleQuestion size={13} aria-hidden="true" />
+        <strong>{questions.length === 1 ? "One quick question" : "A few questions"}</strong>
+      </div>
+      {questions.map((question, index) => {
         const selectedOptions = new Set(selected[question.id] ?? []);
-        return <div className="chat-question" key={question.id}>
-          <p className="t-small">{question.prompt}</p>
-          <div className="chip-row">
-            {question.options.map((option) => {
-              const isSelected = selectedOptions.has(option.id);
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`chip ${isSelected ? "is-selected" : ""}`}
-                  disabled={disabled}
-                  aria-pressed={isSelected}
-                  onClick={() => toggle(question, option.id)}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
+        return (
+          <div className="chat-question" key={question.id}>
+            <p className="chat-question-prompt">
+              {questions.length > 1 && (
+                <span className="t-mono chat-question-num">
+                  {index + 1}/{questions.length}
+                </span>
+              )}
+              {question.prompt}
+              <span className="chat-question-hint">
+                {question.allowMultiple ? "Choose any" : "Choose one"}
+              </span>
+            </p>
+            <div className="chip-row">
+              {question.options.map((option) => {
+                const isSelected = selectedOptions.has(option.id);
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`chip ${isSelected ? "is-selected" : ""}`}
+                    aria-pressed={isSelected}
+                    onClick={() => toggle(question, option.id)}
+                  >
+                    {isSelected && <Check size={11} aria-hidden="true" />}
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+            <input
+              type="text"
+              className="chat-question-other"
+              placeholder="Something else…"
+              value={freeText[question.id] ?? ""}
+              onChange={(event) =>
+                setFreeText((previous) => ({ ...previous, [question.id]: event.target.value }))
+              }
+            />
           </div>
-        </div>;
+        );
       })}
-      {!disabled && (
+      <div className="chat-questions-actions">
+        <span className="chat-questions-progress">
+          {answeredCount}/{questions.length} answered
+        </span>
         <button
           type="button"
-          className="btn btn-primary"
-          disabled={answered.length === 0}
-          onClick={() => onSubmit(compose())}
+          className={`btn ${allAnswered ? "btn-primary" : ""}`}
+          disabled={answeredCount === 0}
+          onClick={() => onSubmit(answers.join("\n"))}
         >
           Send answers
         </button>
-      )}
+      </div>
     </div>
   );
 }

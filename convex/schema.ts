@@ -96,6 +96,17 @@ export default defineSchema({
     ),
     input: v.optional(v.any()),
     partialOutput: v.optional(v.string()),
+    partialToolTrace: v.optional(
+      v.array(
+        v.object({
+          tool: v.string(),
+          summary: v.string(),
+          ok: v.boolean(),
+          stepIndex: v.optional(v.number()),
+          stepStatus: v.optional(v.string()),
+        }),
+      ),
+    ),
     output: v.optional(v.any()),
     error: v.optional(v.string()),
     plan: v.optional(
