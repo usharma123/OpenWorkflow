@@ -7,7 +7,7 @@ import {
   type Connection,
   type Edge,
 } from "@xyflow/react";
-import { Check, Loader2, Play, RotateCcw } from "lucide-react";
+import { Check, History, Loader2, Play, RotateCcw, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, type SetStateAction } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { catalogByType, STARTER_WORKFLOW } from "./catalog";
@@ -22,9 +22,12 @@ import {
   convexClient,
   getRunRef,
   getWorkflowRef,
+  listWorkflowVersionsRef,
   listConnectionsRef,
   retryRunRef,
+  rollbackWorkflowRef,
   startRunRef,
+  publishWorkflowRef,
   upsertWorkflowRef,
 } from "./lib/convexClient";
 import { runDemo } from "./lib/demoRunner";
@@ -75,6 +78,11 @@ interface EditorState {
   approvalBusy: boolean;
   backendLoaded: boolean;
   panelMode: PanelMode;
+  versions: Array<{ _id: Id<"workflowVersions">; version: number; createdAt: number }>;
+  currentVersion: number;
+  publishedVersion?: number;
+  rollbackVersionId?: Id<"workflowVersions">;
+  versionBusy: boolean;
 }
 
 type EditorAction =
@@ -110,6 +118,9 @@ function useWorkflowEditorController() {
     approvalBusy: false,
     backendLoaded: false,
     panelMode: "run",
+    versions: [],
+    currentVersion: 1,
+    versionBusy: false,
   });
   const {
     name,
@@ -124,6 +135,11 @@ function useWorkflowEditorController() {
     approvalBusy,
     backendLoaded,
     panelMode,
+    versions,
+    currentVersion,
+    publishedVersion,
+    rollbackVersionId,
+    versionBusy,
   } = editor;
   const patchEditor = useCallback((patch: Partial<EditorState>) => dispatch({ type: "patch", patch }), []);
   const setLatestResult = useCallback(
@@ -148,6 +164,18 @@ function useWorkflowEditorController() {
     ? [...(latestResult?.steps ?? [])].reverse().find((step) => step.nodeId === selectedNodeId)
     : undefined;
 
+  const refreshVersions = useCallback(async () => {
+    if (!convexClient) return;
+    const state = await convexClient.query(listWorkflowVersionsRef, { externalId: initial.id });
+    const rollbackCandidate = state.versions.find((version) => version.version !== state.currentVersion)?._id;
+    patchEditor({
+      versions: state.versions,
+      currentVersion: state.currentVersion,
+      publishedVersion: state.publishedVersion,
+      rollbackVersionId: rollbackCandidate,
+    });
+  }, [initial.id, patchEditor]);
+
   useEffect(() => {
     if (!convexClient || hydratedOnce.current) return;
     hydratedOnce.current = true;
@@ -168,6 +196,7 @@ function useWorkflowEditorController() {
         });
         setNodes(persistableNodes(remote.nodes as WorkflowNode[]));
         setEdges(remote.edges);
+        void refreshVersions();
       })
       .catch((error) =>
         setNotice({
@@ -175,7 +204,7 @@ function useWorkflowEditorController() {
           tone: "error",
         }),
       )
-  }, [initial.id, navigate, patchEditor, setEdges, setNodes, setNotice]);
+  }, [initial.id, navigate, patchEditor, refreshVersions, setEdges, setNodes, setNotice]);
 
   useEffect(() => {
     if (!backendLoaded) return;
@@ -211,7 +240,10 @@ function useWorkflowEditorController() {
           edges: definition.edges,
           updatedAt: definition.updatedAt,
         })
-        .then(() => patchEditor({ saved: true }))
+        .then(() => {
+          patchEditor({ saved: true });
+          void refreshVersions();
+        })
         .catch((error) =>
           setNotice({
             message: error instanceof Error ? `Save failed: ${error.message}` : "Save failed",
@@ -220,7 +252,43 @@ function useWorkflowEditorController() {
         );
     }, 500);
     return () => window.clearTimeout(saveTimer.current);
-  }, [backendLoaded, description, edges, enabled, initial, maxConcurrentRuns, name, nodes, patchEditor, setNotice]);
+  }, [backendLoaded, description, edges, enabled, initial, maxConcurrentRuns, name, nodes, patchEditor, refreshVersions, setNotice]);
+
+  const publishCurrentVersion = async () => {
+    if (!convexClient || !saved || versionBusy) return;
+    patchEditor({ versionBusy: true });
+    try {
+      const published = await convexClient.mutation(publishWorkflowRef, { externalId: initial.id });
+      await refreshVersions();
+      setNotice({ message: `Version ${published} published for active triggers`, tone: "info" });
+    } catch (error) {
+      setNotice({ message: error instanceof Error ? error.message : "Could not publish workflow", tone: "error" });
+    } finally {
+      patchEditor({ versionBusy: false });
+    }
+  };
+
+  const rollbackToVersion = async () => {
+    if (!convexClient || !rollbackVersionId || versionBusy) return;
+    patchEditor({ versionBusy: true });
+    try {
+      const restored = await convexClient.mutation(rollbackWorkflowRef, {
+        externalId: initial.id,
+        versionId: rollbackVersionId,
+      });
+      const remote = await convexClient.query(getWorkflowRef, { externalId: initial.id });
+      if (!remote) throw new Error("Workflow not found after rollback.");
+      patchEditor({ name: remote.name, description: remote.description, enabled: remote.enabled, saved: true });
+      setNodes(persistableNodes(remote.nodes as WorkflowNode[]));
+      setEdges(remote.edges);
+      await refreshVersions();
+      setNotice({ message: `Restored as draft version ${restored.version}. Publish when ready.`, tone: "info" });
+    } catch (error) {
+      setNotice({ message: error instanceof Error ? error.message : "Could not restore workflow version", tone: "error" });
+    } finally {
+      patchEditor({ versionBusy: false });
+    }
+  };
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -623,6 +691,11 @@ function useWorkflowEditorController() {
     clearSelection,
     onDrop,
     panelMode,
+    versions,
+    currentVersion,
+    publishedVersion,
+    rollbackVersionId,
+    versionBusy,
     selectedNode,
     connections,
     mappingSources,
@@ -660,6 +733,9 @@ function useWorkflowEditorController() {
     setEnabled: (enabled: boolean) => patchEditor({ enabled }),
     setMaxConcurrentRuns: (maxConcurrentRuns: number) => patchEditor({ maxConcurrentRuns }),
     setPanelMode: (panelMode: PanelMode) => patchEditor({ panelMode }),
+    setRollbackVersionId: (rollbackVersionId: Id<"workflowVersions">) => patchEditor({ rollbackVersionId }),
+    publishCurrentVersion,
+    rollbackToVersion,
   };
 }
 
@@ -679,6 +755,11 @@ function WorkflowEditorView({
   clearSelection,
   onDrop,
   panelMode,
+  versions,
+  currentVersion,
+  publishedVersion,
+  rollbackVersionId,
+  versionBusy,
   selectedNode,
   connections,
   mappingSources,
@@ -701,6 +782,9 @@ function WorkflowEditorView({
   setEnabled,
   setMaxConcurrentRuns,
   setPanelMode,
+  setRollbackVersionId,
+  publishCurrentVersion,
+  rollbackToVersion,
 }: ReturnType<typeof useWorkflowEditorController>) {
   return (
     <div className="route">
@@ -721,6 +805,34 @@ function WorkflowEditorView({
         </div>
 
         <div className="topbar-actions">
+          <span className={`version-status ${publishedVersion === currentVersion ? "is-published" : ""}`}>
+            v{currentVersion} · {publishedVersion === currentVersion ? "Published" : "Draft"}
+          </span>
+          <button
+            className="btn"
+            onClick={() => void publishCurrentVersion()}
+            disabled={!saved || versionBusy || publishedVersion === currentVersion}
+            title="Publish this draft for schedules, webhooks, and Google event triggers"
+          >
+            {versionBusy ? <Loader2 className="spin" size={13} /> : <Upload size={13} />} Publish
+          </button>
+          {versions.length > 1 && (
+            <div className="version-rollback">
+              <History size={13} aria-hidden="true" />
+              <select
+                aria-label="Version to restore"
+                value={rollbackVersionId ?? ""}
+                onChange={(event) => setRollbackVersionId(event.target.value as Id<"workflowVersions">)}
+              >
+                {versions.filter((version) => version.version !== currentVersion).map((version) => (
+                  <option key={version._id} value={version._id}>v{version.version}</option>
+                ))}
+              </select>
+              <button className="btn btn-ghost" disabled={!rollbackVersionId || versionBusy} onClick={() => void rollbackToVersion()}>
+                Restore
+              </button>
+            </div>
+          )}
           <button className="btn btn-ghost" onClick={restoreStarter} title="Restore the starter workflow">
             <RotateCcw size={14} /> Reset
           </button>
@@ -730,7 +842,7 @@ function WorkflowEditorView({
               checked={enabled}
               onChange={(event) => setEnabled(event.target.checked)}
             />
-            <span>{enabled ? "Active" : "Draft"}</span>
+            <span>{enabled ? "Active" : "Inactive"}</span>
           </label>
           <label className="run-limit" title="Maximum queued, running, or waiting runs for this workflow">
             <span>Parallel runs</span>

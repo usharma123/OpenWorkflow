@@ -15,17 +15,22 @@ export default defineSchema({
     nodes: v.array(v.any()),
     edges: v.array(v.any()),
     webhookSlug: v.optional(v.string()),
+    publishedWebhookSlug: v.optional(v.string()),
     webhookSecret: v.optional(v.string()),
     lastScheduleMinuteByNode: v.optional(v.any()),
     googleTriggerState: v.optional(v.any()),
     version: v.optional(v.number()),
     currentVersionId: v.optional(v.id("workflowVersions")),
+    publishedVersionId: v.optional(v.id("workflowVersions")),
+    publishedVersion: v.optional(v.number()),
+    publishedOwnerUserId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_owner_external_id", ["ownerKey", "externalId"])
     .index("by_owner_updated_at", ["ownerKey", "updatedAt"])
     .index("by_webhook_slug_secret", ["webhookSlug", "webhookSecret"])
+    .index("by_published_webhook_slug_secret", ["publishedWebhookSlug", "webhookSecret"])
     .index("by_enabled", ["enabled"]),
 
   workflowVersions: defineTable({

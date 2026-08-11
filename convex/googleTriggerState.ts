@@ -8,17 +8,22 @@ export const listEnabled = internalQuery({
   args: {},
   handler: async (ctx) => {
     const workflows = await ctx.db.query("workflows").withIndex("by_enabled", (q) => q.eq("enabled", true)).take(100);
-    return workflows.flatMap((workflow) => {
-      if (!workflow.ownerKey || !workflow.ownerUserId) return [];
+    const candidates = await Promise.all(workflows.map(async (workflow) => {
+      const triggerOwnerUserId = workflow.publishedVersionId
+        ? workflow.publishedOwnerUserId ?? workflow.ownerUserId
+        : workflow.ownerUserId;
+      if (!workflow.ownerKey || !triggerOwnerUserId) return [];
+      const published = workflow.publishedVersionId ? await ctx.db.get(workflow.publishedVersionId) : null;
+      const nodes = published?.workflowId === workflow._id ? published.nodes : workflow.nodes;
       const states = (workflow.googleTriggerState ?? {}) as Record<string, unknown>;
-      return (workflow.nodes as Array<{ id: string; data: { nodeType: string; config: Record<string, unknown> } }>).flatMap((node) => {
+      return (nodes as Array<{ id: string; data: { nodeType: string; config: Record<string, unknown> } }>).flatMap((node) => {
         if (!triggerTypes.has(node.data.nodeType) || node.data.config.executionMode !== "live") return [];
         const connectionRef = String(node.data.config.connectionRef ?? "");
         if (!connectionRef) return [];
         return [{
           workflowId: workflow._id,
           ownerKey: workflow.ownerKey!,
-          ownerUserId: workflow.ownerUserId!,
+          ownerUserId: triggerOwnerUserId,
           nodeId: node.id,
           nodeType: node.data.nodeType,
           config: node.data.config,
@@ -26,7 +31,8 @@ export const listEnabled = internalQuery({
           state: states[node.id],
         }];
       });
-    });
+    }));
+    return candidates.flat();
   },
 });
 
@@ -67,7 +73,7 @@ export const claimAndStart = internalMutation({
       ...args.input,
       triggerNodeId: args.nodeId,
       triggerType: args.nodeType,
-    }, { runMode: "resume", scopeNodeId: args.nodeId });
+    }, { runMode: "resume", scopeNodeId: args.nodeId, usePublished: true });
   },
 });
 

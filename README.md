@@ -167,6 +167,11 @@ Workflow runs are pinned to an immutable workflow version. Connections carry ind
 packets, so sibling branches receive their common parent's output and multi-input joins receive an
 `items` array plus source provenance instead of whichever branch happened to run last.
 
+Editor changes create draft versions. Publishing explicitly selects the immutable version used by
+schedules, webhooks, and Google event triggers; manual editor runs continue to test the current
+draft. Restoring an older revision creates a new draft version, so history is never rewritten and
+the currently published automation is unchanged until the restored draft is published.
+
 Retries, exponential backoff, and HTTP/model request timeouts are configurable per step. Each
 workflow also enforces a 1–25 active-run concurrency limit (three by default). Webhook callers can
 send `Idempotency-Key` or `X-Idempotency-Key`; repeated keys return the original run for 24 hours

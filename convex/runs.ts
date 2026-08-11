@@ -37,9 +37,13 @@ export async function createPinnedRun(
     runMode?: "full" | "single" | "through" | "resume";
     scopeNodeId?: string;
     idempotencyKey?: string;
+    usePublished?: boolean;
   } = {},
 ) {
-  if (!definition.ownerKey || !definition.ownerUserId) throw new Error("Workflow ownership is invalid.");
+  const runOwnerUserId = options.usePublished
+    ? definition.publishedOwnerUserId ?? definition.ownerUserId
+    : definition.ownerUserId;
+  if (!definition.ownerKey || !runOwnerUserId) throw new Error("Workflow ownership is invalid.");
   const idempotencyKey = options.idempotencyKey?.trim().slice(0, 200);
   if (idempotencyKey) {
     const existingClaim = await ctx.db
@@ -57,13 +61,18 @@ export async function createPinnedRun(
   if (activeRuns.reduce((count, runs) => count + runs.length, 0) >= maxConcurrentRuns) {
     throw new Error(`Workflow already has ${maxConcurrentRuns} active runs. Try again after one finishes.`);
   }
-  const version = await ensureWorkflowVersion(ctx, definition);
+  const published = options.usePublished && definition.publishedVersionId
+    ? await ctx.db.get(definition.publishedVersionId)
+    : null;
+  const version = published?.workflowId === definition._id
+    ? published
+    : await ensureWorkflowVersion(ctx, definition);
   const runId = await ctx.db.insert("workflowRuns", {
     workflowId: definition._id,
     workflowVersionId: version._id,
     workflowVersion: version.version,
     ownerKey: definition.ownerKey,
-    ownerUserId: definition.ownerUserId,
+    ownerUserId: runOwnerUserId,
     status: "queued",
     trigger,
     idempotencyKey,
@@ -149,7 +158,7 @@ export const startForWebhook = internalMutation({
   handler: async (ctx, { workflowId, input, idempotencyKey }) => {
     const definition = await ctx.db.get(workflowId);
     if (!definition) throw new Error("Workflow not found.");
-    return createPinnedRun(ctx, definition, "webhook", input, { idempotencyKey });
+    return createPinnedRun(ctx, definition, "webhook", input, { idempotencyKey, usePublished: true });
   },
 });
 

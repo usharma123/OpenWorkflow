@@ -1,5 +1,5 @@
 import { internalMutation } from "./_generated/server";
-import { createPinnedRun, ensureWorkflowVersion } from "./runs";
+import { createPinnedRun } from "./runs";
 
 type ScheduleNode = {
   id: string;
@@ -67,7 +67,11 @@ export const dispatch = internalMutation({
       .collect();
     const dispatchCounts = await Promise.all(definitions.map(async (definition) => {
       if (!definition.ownerKey || !definition.ownerUserId) return 0;
-      const nodes = definition.nodes as ScheduleNode[];
+      const published = definition.publishedVersionId ? await ctx.db.get(definition.publishedVersionId) : null;
+      const executableDefinition = published?.workflowId === definition._id
+        ? { ...definition, nodes: published.nodes, edges: published.edges }
+        : definition;
+      const nodes = executableDefinition.nodes as ScheduleNode[];
       const schedules = nodes.filter((node) => node?.data?.nodeType === "scheduleTrigger");
       const lastFired = (definition.lastScheduleMinuteByNode ?? {}) as Record<string, string>;
       const nextLastFired = { ...lastFired };
@@ -84,18 +88,14 @@ export const dispatch = internalMutation({
       });
       if (dueSchedules.length === 0) return 0;
 
-      // Pin once before concurrent run creation so legacy definitions cannot
-      // race and create duplicate workflow-version records.
-      const version = await ensureWorkflowVersion(ctx, definition);
-      const pinnedDefinition = { ...definition, currentVersionId: version._id };
       await Promise.all(dueSchedules.map((node) => {
         const timezone = node.data.config.timezone ?? "UTC";
         nextLastFired[node.id] = minuteKey;
-        return createPinnedRun(ctx, pinnedDefinition, "schedule", {
+        return createPinnedRun(ctx, executableDefinition, "schedule", {
           scheduledAt: now,
           timezone,
           triggerNodeId: node.id,
-        });
+        }, { usePublished: true });
       }));
 
       await ctx.db.patch(definition._id, { lastScheduleMinuteByNode: nextLastFired });

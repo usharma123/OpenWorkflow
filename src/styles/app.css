@@ -191,6 +191,32 @@
   font: inherit;
 }
 
+.version-status {
+  color: var(--ink-7);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.version-status.is-published {
+  color: var(--success-text);
+}
+
+.version-rollback {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.version-rollback select {
+  height: 30px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--ink-9);
+  font: 11px var(--font-mono);
+}
+
 /* Expanded run inside the history list. */
 .run-detail {
   margin: -2px 0 8px;

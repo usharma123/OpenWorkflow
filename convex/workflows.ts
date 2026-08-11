@@ -2,6 +2,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requirePrincipal } from "./auth";
 import { validateWorkflowGraph } from "./policies";
+import { ensureWorkflowVersion } from "./runs";
 
 const workflowArgs = {
   externalId: v.string(),
@@ -57,6 +58,122 @@ export const getByExternalId = query({
         q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId),
       )
       .unique();
+  },
+});
+
+export const listVersions = query({
+  args: { externalId: v.string() },
+  handler: async (ctx, { externalId }) => {
+    const principal = await requirePrincipal(ctx);
+    const workflow = await ctx.db
+      .query("workflows")
+      .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
+      .unique();
+    if (!workflow) throw new Error("Workflow not found.");
+    const versions = await ctx.db
+      .query("workflowVersions")
+      .withIndex("by_workflow_version", (q) => q.eq("workflowId", workflow._id))
+      .order("desc")
+      .take(50);
+    return {
+      currentVersionId: workflow.currentVersionId,
+      currentVersion: workflow.version ?? 1,
+      publishedVersionId: workflow.publishedVersionId,
+      publishedVersion: workflow.publishedVersion,
+      versions: versions.map((version) => ({
+        _id: version._id,
+        version: version.version,
+        createdAt: version.createdAt,
+      })),
+    };
+  },
+});
+
+export const publish = mutation({
+  args: { externalId: v.string() },
+  handler: async (ctx, { externalId }) => {
+    const principal = await requirePrincipal(ctx);
+    const workflow = await ctx.db
+      .query("workflows")
+      .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
+      .unique();
+    if (!workflow) throw new Error("Workflow not found.");
+    const version = await ensureWorkflowVersion(ctx, workflow);
+    const googleRefs = new Set<string>();
+    let publishedWebhookSlug: string | undefined;
+    for (const node of version.nodes) {
+      const nodeType = String(node?.data?.nodeType ?? "");
+      const config = node?.data?.config as Record<string, unknown> | undefined;
+      if (nodeType === "webhookTrigger" && typeof config?.slug === "string" && config.slug.trim()) {
+        publishedWebhookSlug = config.slug.trim();
+      }
+      if (["gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger", "googleDoc"].includes(nodeType) &&
+        config?.executionMode === "live" && typeof config.connectionRef === "string" && config.connectionRef) {
+        googleRefs.add(config.connectionRef);
+      }
+    }
+    const connectionOwners = new Set<string>();
+    for (const externalId of googleRefs) {
+      const connection = await ctx.db
+        .query("connections")
+        .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
+        .unique();
+      if (!connection?.clerkUserId || connection.provider !== "google" || connection.status !== "active") {
+        throw new Error("Reconnect every Google account used by this draft before publishing.");
+      }
+      connectionOwners.add(connection.clerkUserId);
+    }
+    if (connectionOwners.size > 1) throw new Error("Published Google steps must use accounts connected by one user.");
+    const webhookSecret = publishedWebhookSlug
+      ? workflow.webhookSecret ?? crypto.randomUUID().replaceAll("-", "")
+      : workflow.webhookSecret;
+    await ctx.db.patch(workflow._id, {
+      publishedVersionId: version._id,
+      publishedVersion: version.version,
+      publishedWebhookSlug,
+      webhookSecret,
+      publishedOwnerUserId: connectionOwners.values().next().value ?? workflow.ownerUserId,
+      updatedAt: Date.now(),
+    });
+    return version.version;
+  },
+});
+
+export const rollback = mutation({
+  args: { externalId: v.string(), versionId: v.id("workflowVersions") },
+  handler: async (ctx, { externalId, versionId }) => {
+    const principal = await requirePrincipal(ctx);
+    const workflow = await ctx.db
+      .query("workflows")
+      .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
+      .unique();
+    const target = await ctx.db.get(versionId);
+    if (!workflow || !target || workflow.ownerKey !== principal.ownerKey || target.workflowId !== workflow._id) {
+      throw new Error("Workflow version not found.");
+    }
+    const version = (workflow.version ?? 0) + 1;
+    const now = Date.now();
+    const currentVersionId = await ctx.db.insert("workflowVersions", {
+      ownerKey: principal.ownerKey,
+      workflowId: workflow._id,
+      version,
+      name: target.name,
+      description: target.description,
+      enabled: workflow.enabled,
+      nodes: target.nodes,
+      edges: target.edges,
+      createdAt: now,
+    });
+    await ctx.db.patch(workflow._id, {
+      name: target.name,
+      description: target.description,
+      nodes: target.nodes,
+      edges: target.edges,
+      version,
+      currentVersionId,
+      updatedAt: now,
+    });
+    return { version, currentVersionId };
   },
 });
 
@@ -117,7 +234,9 @@ export const upsert = mutation({
     };
     const webhookSlug = webhookSlugs.values().next().value;
     const hasWebhook = Boolean(webhookSlug);
-    const webhookSecret = hasWebhook ? existing?.webhookSecret ?? crypto.randomUUID().replaceAll("-", "") : undefined;
+    const webhookSecret = hasWebhook || existing?.publishedVersionId
+      ? existing?.webhookSecret ?? crypto.randomUUID().replaceAll("-", "")
+      : undefined;
     if (existing) {
       const changed = definitionChanged(existing, args);
       const version = existing.currentVersionId && !changed
@@ -247,13 +366,14 @@ export const remove = mutation({
     const principal = await requirePrincipal(ctx);
     const workflow = await ctx.db.get(workflowId);
     if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
-    const [runs, versions, triggerEvents] = await Promise.all([
+    const [runs, versions, triggerEvents, runClaims] = await Promise.all([
       ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
       ctx.db
         .query("workflowVersions")
         .withIndex("by_workflow_version", (q) => q.eq("workflowId", workflowId))
         .collect(),
       ctx.db.query("triggerEvents").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
+      ctx.db.query("runClaims").withIndex("by_workflow_key", (q) => q.eq("workflowId", workflowId)).collect(),
     ]);
     await Promise.all(runs.map(async (run) => {
       const [steps, auditLogs] = await Promise.all([
@@ -268,6 +388,7 @@ export const remove = mutation({
     }));
     await Promise.all(versions.map((version) => ctx.db.delete(version._id)));
     await Promise.all(triggerEvents.map((event) => ctx.db.delete(event._id)));
+    await Promise.all(runClaims.map((claim) => ctx.db.delete(claim._id)));
     await ctx.db.delete(workflowId);
   },
 });
