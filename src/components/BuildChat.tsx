@@ -46,8 +46,8 @@ function ProposalCard({
       </div>
       {proposal.description && <p className="t-small t-muted">{proposal.description}</p>}
       <ol className="chat-proposal-steps">
-        {steps.map((step, index) => (
-          <li key={`${index}-${step}`}>{step}</li>
+        {steps.map((step) => (
+          <li key={step}>{step}</li>
         ))}
       </ol>
       <p className="t-small t-muted">
@@ -96,26 +96,26 @@ function QuestionsCard({
     });
   };
 
-  const answered = questions.filter((question) => (selected[question.id] ?? []).length > 0);
+  const answered = questions.flatMap((question) => {
+    const chosen = new Set(selected[question.id] ?? []);
+    if (chosen.size === 0) return [];
+    const labels = question.options.flatMap((option) => chosen.has(option.id) ? [option.label] : []);
+    return [{ prompt: question.prompt, labels }];
+  });
   const compose = () =>
     answered
-      .map((question) => {
-        const chosen = selected[question.id] ?? [];
-        const labels = question.options
-          .filter((option) => chosen.includes(option.id))
-          .map((option) => option.label);
-        return `${question.prompt} → ${labels.join(", ")}`;
-      })
+      .map((answer) => `${answer.prompt} → ${answer.labels.join(", ")}`)
       .join("\n");
 
   return (
     <div className="chat-questions">
-      {questions.map((question) => (
-        <div className="chat-question" key={question.id}>
+      {questions.map((question) => {
+        const selectedOptions = new Set(selected[question.id] ?? []);
+        return <div className="chat-question" key={question.id}>
           <p className="t-small">{question.prompt}</p>
           <div className="chip-row">
             {question.options.map((option) => {
-              const isSelected = (selected[question.id] ?? []).includes(option.id);
+              const isSelected = selectedOptions.has(option.id);
               return (
                 <button
                   key={option.id}
@@ -130,8 +130,8 @@ function QuestionsCard({
               );
             })}
           </div>
-        </div>
-      ))}
+        </div>;
+      })}
       {!disabled && (
         <button
           type="button"
@@ -152,6 +152,7 @@ export function BuildChat({ workflowExternalId, getGraph, onApply }: BuildChatPr
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const latestMessageStatus = messages.at(-1)?.status;
 
   useEffect(() => {
     if (!convexClient) return;
@@ -169,7 +170,7 @@ export function BuildChat({ workflowExternalId, getGraph, onApply }: BuildChatPr
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages.length, messages[messages.length - 1]?.status]);
+  }, [messages.length, latestMessageStatus]);
 
   const send = async (content: string) => {
     if (!convexClient || sending) return;
@@ -250,7 +251,9 @@ export function BuildChat({ workflowExternalId, getGraph, onApply }: BuildChatPr
           void send(draft);
         }}
       >
+        <label className="sr-only" htmlFor="build-chat-draft">Workflow request</label>
         <textarea
+          id="build-chat-draft"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Describe the workflow you want, or ask to change the current one…"

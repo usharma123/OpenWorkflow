@@ -914,7 +914,7 @@ function WorkflowEditorView({
                 value={rollbackVersionId ?? ""}
                 onChange={(event) => setRollbackVersionId(event.target.value as Id<"workflowVersions">)}
               >
-                {versions.filter((version) => version.version !== currentVersion).map((version) => (
+                {versions.map((version) => version.version === currentVersion ? null : (
                   <option key={version._id} value={version._id}>v{version.version}</option>
                 ))}
               </select>

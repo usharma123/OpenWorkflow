@@ -207,8 +207,8 @@ function PlanChecklist({ plan }: { plan: RunStepPlan }) {
     <div className="tx-plan">
       <span className="t-eyebrow">Plan</span>
       <ol className="tx-plan-list">
-        {plan.steps.map((planStep, index) => (
-          <li key={`${planStep.title}-${index}`} className={`is-${planStep.status}`}>
+        {plan.steps.map((planStep) => (
+          <li key={planStep.title} className={`is-${planStep.status}`}>
             <span className="tx-plan-mark">
               {planStep.status === "done" ? (
                 <Check size={12} />
@@ -276,7 +276,7 @@ function PlanReviewCard({
   busy: boolean;
   onDecision: (approved: boolean, steps?: string[], note?: string) => void;
 }) {
-  const [draft, setDraft] = useState(review.steps.join("\n"));
+  const [draft, setDraft] = useState(() => review.steps.join("\n"));
   const [note, setNote] = useState("");
   const editedSteps = draft
     .split("\n")
@@ -399,8 +399,8 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
 
       {toolTrace.length > 0 && (
         <ul className="tx-tool-trace">
-          {toolTrace.map((entry, index) => (
-            <li key={`${entry.summary}-${index}`} className={entry.ok ? undefined : "is-failed"}>
+          {toolTrace.map((entry) => (
+            <li key={entry.summary} className={entry.ok ? undefined : "is-failed"}>
               {entry.summary}
             </li>
           ))}
@@ -409,8 +409,8 @@ function ModelBlock({ step }: { step: RunStepSummary }) {
 
       {subagents.length > 0 && (
         <div className="tx-subagents">
-          {subagents.map((subagent, index) => (
-            <SubagentBlock key={`${subagent.name}-${index}`} subagent={subagent} />
+          {subagents.map((subagent) => (
+            <SubagentBlock key={subagent.name} subagent={subagent} />
           ))}
         </div>
       )}
