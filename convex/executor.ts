@@ -215,7 +215,10 @@ export const applyPlanDecision = internalMutation({
       });
       return;
     }
-    const edited = (steps ?? []).map((title) => title.trim()).filter(Boolean);
+    const edited = (steps ?? []).flatMap((title) => {
+      const trimmed = title.trim();
+      return trimmed ? [trimmed] : [];
+    });
     const finalTitles = edited.length
       ? parsePlanSteps(edited)
       : (stepRun.plan?.steps ?? []).map((planStep) => planStep.title);
@@ -510,11 +513,12 @@ export const executeWorkflow = workflow
       const edges = definition.edges as WorkflowEdge[];
       const activeNodeIds = nodeIdsForRunScope(nodes, edges, run.runMode ?? "full", run.scopeNodeId);
       const ordered = topologicalNodes(nodes, edges).filter((node) => activeNodeIds.has(node.id));
+      const nodesById = new Map(nodes.map((node) => [node.id, node]));
       const outputs = new Map<string, ExecutionPacket>();
 
       if (run.seedOutputs && typeof run.seedOutputs === "object" && !Array.isArray(run.seedOutputs)) {
         for (const [nodeId, output] of Object.entries(run.seedOutputs as Record<string, unknown>)) {
-          const node = nodes.find((candidate) => candidate.id === nodeId);
+          const node = nodesById.get(nodeId);
           if (node && !activeNodeIds.has(nodeId)) outputs.set(nodeId, packetForNodeOutput(node, output));
         }
       }
@@ -612,7 +616,10 @@ export const executeWorkflow = workflow
             if (!decision.approved) {
               throw new Error(decision.note?.trim() || "The research plan was rejected.");
             }
-            const edited = (decision.steps ?? []).map((title) => title.trim()).filter(Boolean);
+            const edited = (decision.steps ?? []).flatMap((title) => {
+              const trimmed = title.trim();
+              return trimmed ? [trimmed] : [];
+            });
             const approvedSteps = edited.length ? parsePlanSteps(edited) : proposedSteps;
             const result = await step.runAction(internal.agentExecution.runAgent, {
               model,

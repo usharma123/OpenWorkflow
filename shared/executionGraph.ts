@@ -155,10 +155,13 @@ export function mergeExecutionValues(input: unknown, mode: MergeMode): unknown {
     : [input];
   if (mode === "first") return values[0];
   if (mode === "combine") {
-    return values.reduce<Record<string, unknown>>((combined, value) =>
-      value && typeof value === "object" && !Array.isArray(value)
-        ? { ...combined, ...(value as Record<string, unknown>) }
-        : combined, {});
+    const combined: Record<string, unknown> = {};
+    for (const value of values) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        Object.assign(combined, value);
+      }
+    }
+    return combined;
   }
   const items = values.flatMap((value) => Array.isArray(value) ? value : [value]);
   return { items, count: items.length };

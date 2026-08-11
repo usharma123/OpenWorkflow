@@ -99,16 +99,18 @@ export function validateWorkflowGraph(nodes: WorkflowGraphNode[], edges: Workflo
     if (edge.source === edge.target) throw new Error("A workflow step cannot connect to itself.");
     const sourceNode = nodesById.get(edge.source);
     const targetNode = nodesById.get(edge.target);
-    if (sourceNode?.data?.nodeType === "daytonaSandbox" || targetNode?.data?.nodeType === "daytonaSandbox") {
+    const sourceNodeType = sourceNode?.data?.nodeType;
+    const targetNodeType = targetNode?.data?.nodeType;
+    if (sourceNodeType === "daytonaSandbox" || targetNodeType === "daytonaSandbox") {
       throw new Error("Connect the steps inside a Daytona boundary, not the boundary itself.");
     }
-    if (sourceNode?.data?.nodeType === "condition" && !["true", "false"].includes(String(edge.sourceHandle))) {
+    if (sourceNodeType === "condition" && !["true", "false"].includes(String(edge.sourceHandle))) {
       throw new Error("Condition connections must use the true or false output port.");
     }
     if (edge.sourceHandle === "error") {
       const config = sourceNode?.data?.config as Record<string, unknown> | undefined;
       if (config?.errorOutput !== true) throw new Error("Enable the error output before connecting a recovery branch.");
-    } else if (edge.sourceHandle && sourceNode?.data?.nodeType !== "condition") {
+    } else if (edge.sourceHandle && sourceNodeType !== "condition") {
       throw new Error("That workflow step does not provide the selected output port.");
     }
 

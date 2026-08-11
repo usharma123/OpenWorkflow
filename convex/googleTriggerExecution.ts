@@ -52,21 +52,20 @@ async function gmailEvents(candidate: Candidate, token: string, cursor: number):
     token,
   );
   const messages = Array.isArray(list.messages) ? list.messages as Array<{ id?: string }> : [];
-  const events: TriggerEvent[] = [];
-  for (const item of [...messages].reverse()) {
-    if (!item.id) continue;
+  const messageIds = messages.flatMap((item) => item.id ? [item.id] : []);
+  const events = await Promise.all(messageIds.reverse().map(async (id): Promise<TriggerEvent> => {
     const message = await googleJson(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(item.id)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
       token,
     );
     const payload = stateRecord(message.payload);
     const headers = Array.isArray(payload.headers) ? payload.headers as Array<{ name?: string; value?: string }> : [];
     const metadata = Object.fromEntries(headers.map((header) => [String(header.name ?? "").toLowerCase(), header.value ?? ""]));
-    events.push({
-      key: item.id,
+    return {
+      key: id,
       input: {
         messages: [{
-          id: item.id,
+          id,
           threadId: message.threadId,
           from: metadata.from,
           to: metadata.to,
@@ -75,8 +74,8 @@ async function gmailEvents(candidate: Candidate, token: string, cursor: number):
         }],
         count: 1,
       },
-    });
-  }
+    };
+  }));
   return events;
 }
 
@@ -218,40 +217,50 @@ async function pollCandidate(ctx: ActionCtx, candidate: Candidate) {
     });
     return;
   }
-  for (const event of events.slice(0, 20)) {
-    await ctx.runMutation(internal.googleTriggerState.claimAndStart, {
+  await Promise.all(events.slice(0, 20).map((event) =>
+    ctx.runMutation(internal.googleTriggerState.claimAndStart, {
       workflowId: candidate.workflowId,
       nodeId: candidate.nodeId,
       nodeType: candidate.nodeType,
       dedupeKey: `${candidate.workflowId}:${candidate.nodeId}:${event.key}`,
       input: event.input,
       state: nextState,
+    }),
+  ));
+}
+
+async function pollCandidateSafely(ctx: ActionCtx, candidate: Candidate): Promise<boolean> {
+  try {
+    await pollCandidate(ctx, candidate);
+    return true;
+  } catch (error) {
+    const previous = stateRecord(candidate.state);
+    await ctx.runMutation(internal.googleTriggerState.checkpoint, {
+      workflowId: candidate.workflowId,
+      nodeId: candidate.nodeId,
+      state: {
+        ...previous,
+        lastError: error instanceof Error ? error.message.slice(0, 300) : "Google trigger polling failed.",
+        checkedAt: Date.now(),
+      },
     });
+    return false;
   }
+}
+
+async function pollCandidateBatch(ctx: ActionCtx, candidates: Candidate[], start = 0): Promise<number> {
+  const batch = candidates.slice(start, start + 4);
+  if (batch.length === 0) return 0;
+  const results = await Promise.all(batch.map((candidate) => pollCandidateSafely(ctx, candidate)));
+  const checked = results.filter(Boolean).length;
+  return checked + await pollCandidateBatch(ctx, candidates, start + batch.length);
 }
 
 export const poll = internalAction({
   args: {},
   handler: async (ctx) => {
     const candidates = await ctx.runQuery(internal.googleTriggerState.listEnabled, {}) as Candidate[];
-    let checked = 0;
-    for (const candidate of candidates) {
-      try {
-        await pollCandidate(ctx, candidate);
-        checked += 1;
-      } catch (error) {
-        const previous = stateRecord(candidate.state);
-        await ctx.runMutation(internal.googleTriggerState.checkpoint, {
-          workflowId: candidate.workflowId,
-          nodeId: candidate.nodeId,
-          state: {
-            ...previous,
-            lastError: error instanceof Error ? error.message.slice(0, 300) : "Google trigger polling failed.",
-            checkedAt: Date.now(),
-          },
-        });
-      }
-    }
+    const checked = await pollCandidateBatch(ctx, candidates);
     return { checked };
   },
 });

@@ -540,7 +540,10 @@ export const runAgent = internalAction({
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error("OPENROUTER_API_KEY is not configured in Convex.");
 
-    const plan = (args.plan ?? []).map((title) => title.trim()).filter(Boolean);
+    const plan = (args.plan ?? []).flatMap((title) => {
+      const trimmed = title.trim();
+      return trimmed ? [trimmed] : [];
+    });
     const hasPlan = plan.length > 0;
     const tools = openAiToolsForCompute({ plan: hasPlan, subagents: true });
     const allowedTools: readonly AgentToolName[] = hasPlan
@@ -707,23 +710,31 @@ export const runAgent = internalAction({
       }
 
       if (sandbox) {
-        for (const path of knownArtifactPaths()) {
+        const activeSandbox = sandbox;
+        const harvested = await Promise.all(knownArtifactPaths().map(async (path) => {
+          const type = inferArtifactType(path);
+          const key = `${type}:${path}`;
+          if (artifactKeys.has(key)) return undefined;
           try {
-            const type = inferArtifactType(path);
-            const key = `${type}:${path}`;
-            if (artifactKeys.has(key)) continue;
-            const fileContent = await readSandboxFile(sandbox, path);
-            if (!fileContent.trim()) continue;
-            artifactKeys.add(key);
-            artifacts.push({
+            const fileContent = await readSandboxFile(activeSandbox, path);
+            if (!fileContent.trim()) return undefined;
+            return {
               type,
               path,
               mediaType: inferMediaType(path),
               content: capArtifactContent(fileContent),
-            });
+            } satisfies AgentArtifact;
           } catch {
             // Optional harvest — missing paths are fine.
+            return undefined;
           }
+        }));
+        for (const artifact of harvested) {
+          if (!artifact) continue;
+          const key = `${artifact.type}:${artifact.path}`;
+          if (artifactKeys.has(key)) continue;
+          artifactKeys.add(key);
+          artifacts.push(artifact);
         }
       }
 

@@ -281,9 +281,14 @@ export function parseBuildProposal(raw: unknown): BuildProposal {
   const outgoing = new Map<string, string[]>();
   for (const edge of edges) {
     indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
-    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+    const targets = outgoing.get(edge.source);
+    if (targets) targets.push(edge.target);
+    else outgoing.set(edge.source, [edge.target]);
   }
-  const queue = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0).map((node) => node.id);
+  const queue: string[] = [];
+  for (const node of nodes) {
+    if ((indegree.get(node.id) ?? 0) === 0) queue.push(node.id);
+  }
   let visited = 0;
   while (queue.length) {
     const id = queue.shift()!;

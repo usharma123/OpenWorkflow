@@ -136,17 +136,17 @@ export const historyForGenerate = internalQuery({
       )
       .order("desc")
       .take(21);
-    return messages
-      .reverse()
-      .filter((message) => message._id !== args.assistantMessageId && message.status !== "failed")
-      .map((message) => ({
+    return messages.reverse().flatMap((message) => {
+      if (message._id === args.assistantMessageId || message.status === "failed") return [];
+      return [{
         role: message.role,
         content: message.proposal
           ? `${message.content}\n\n(Proposed workflow "${message.proposal.name ?? "Untitled"}" with ${message.proposal.nodes.length} steps.)`
           : message.questions?.length
             ? `${message.content}\n\n(Asked the user: ${message.questions.map((question) => question.prompt).join(" | ")})`
             : message.content,
-      }));
+      }];
+    });
   },
 });
 

@@ -138,7 +138,7 @@ export const publish = mutation({
       .unique();
     if (!workflow) throw new Error("Workflow not found.");
     const version = await ensureWorkflowVersion(ctx, workflow);
-    const googleRefs = new Set<string>();
+    const connectorRequirements = new Map<string, { provider: "google" | "slack" | "microsoft"; label: string }>();
     let publishedWebhookSlug: string | undefined;
     for (const node of version.nodes) {
       const nodeType = String(node?.data?.nodeType ?? "");
@@ -151,28 +151,31 @@ export const publish = mutation({
         if (typeof config?.connectionRef !== "string" || !config.connectionRef) {
           throw new Error(`${node?.data?.label ?? nodeType} needs an active connected account before publishing.`);
         }
-        if (provider === "google") googleRefs.add(config.connectionRef);
-        const connection = await ctx.db
-          .query("connections")
-          .withIndex("by_owner_external_id", (q) =>
-            q.eq("ownerKey", principal.ownerKey).eq("externalId", config.connectionRef as string),
-          )
-          .unique();
-        if (!connection || connection.provider !== provider || connection.status !== "active") {
-          throw new Error(`Reconnect the account used by ${node?.data?.label ?? nodeType} before publishing.`);
-        }
+        connectorRequirements.set(config.connectionRef, {
+          provider,
+          label: String(node?.data?.label ?? nodeType),
+        });
       }
     }
-    const connectionOwners = new Set<string>();
-    for (const externalId of googleRefs) {
-      const connection = await ctx.db
+    const connections = await Promise.all([...connectorRequirements].map(async ([externalId, requirement]) => ({
+      externalId,
+      requirement,
+      connection: await ctx.db
         .query("connections")
         .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
-        .unique();
-      if (!connection?.clerkUserId || connection.provider !== "google" || connection.status !== "active") {
-        throw new Error("Reconnect every Google account used by this draft before publishing.");
+        .unique(),
+    })));
+    const connectionOwners = new Set<string>();
+    for (const { connection, requirement } of connections) {
+      if (!connection || connection.provider !== requirement.provider || connection.status !== "active") {
+        throw new Error(`Reconnect the account used by ${requirement.label} before publishing.`);
       }
-      connectionOwners.add(connection.clerkUserId);
+      if (requirement.provider === "google") {
+        if (!connection.clerkUserId) {
+          throw new Error("Reconnect every Google account used by this draft before publishing.");
+        }
+        connectionOwners.add(connection.clerkUserId);
+      }
     }
     if (connectionOwners.size > 1) throw new Error("Published Google steps must use accounts connected by one user.");
     const webhookSecret = publishedWebhookSlug
@@ -194,11 +197,13 @@ export const rollback = mutation({
   args: { externalId: v.string(), versionId: v.id("workflowVersions") },
   handler: async (ctx, { externalId, versionId }) => {
     const principal = await requirePrincipal(ctx);
-    const workflow = await ctx.db
-      .query("workflows")
-      .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
-      .unique();
-    const target = await ctx.db.get(versionId);
+    const [workflow, target] = await Promise.all([
+      ctx.db
+        .query("workflows")
+        .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
+        .unique(),
+      ctx.db.get(versionId),
+    ]);
     if (!workflow || !target || workflow.ownerKey !== principal.ownerKey || target.workflowId !== workflow._id) {
       throw new Error("Workflow version not found.");
     }

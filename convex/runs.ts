@@ -187,11 +187,13 @@ export const retry = mutation({
     if (!failedStep) throw new Error("The failed step could not be identified.");
     const version = previous.workflowVersionId ? await ctx.db.get(previous.workflowVersionId) : await ensureWorkflowVersion(ctx, definition);
     if (!version || version.workflowId !== definition._id) throw new Error("The workflow version for this run is unavailable.");
-    const seedOutputs = Object.fromEntries(
-      steps
-        .filter((step) => step.status === "completed" && step.output !== undefined)
-        .map((step) => [step.nodeId, step.output]),
-    );
+    const seedOutputEntries: Array<[string, unknown]> = [];
+    for (const step of steps) {
+      if (step.status === "completed" && step.output !== undefined) {
+        seedOutputEntries.push([step.nodeId, step.output]);
+      }
+    }
+    const seedOutputs = Object.fromEntries(seedOutputEntries);
     const retryRunId = await ctx.db.insert("workflowRuns", {
       workflowId: definition._id,
       workflowVersionId: version._id,
@@ -248,10 +250,10 @@ export const decidePlan = mutation({
           step.ownerKey === principal.ownerKey,
       );
     if (!waitingStep) throw new Error("This plan review is no longer pending.");
-    const steps = (args.steps ?? [])
-      .map((title) => title.trim().slice(0, 300))
-      .filter(Boolean)
-      .slice(0, MAX_PLAN_STEPS);
+    const steps = (args.steps ?? []).flatMap((title) => {
+      const trimmed = title.trim().slice(0, 300);
+      return trimmed ? [trimmed] : [];
+    }).slice(0, MAX_PLAN_STEPS);
     await sendEvent(ctx, components.workflow, {
       name: `plan:${args.nodeId}`,
       workflowId: run.workflowEngineId,

@@ -680,31 +680,3 @@ export function capArtifactContent(content: string): string {
   if (content.length <= MAX_ARTIFACT_CHARS) return content;
   return `${content.slice(0, MAX_ARTIFACT_CHARS)}\n…[truncated]`;
 }
-
-/** Prompt-only starters — never change capability flags. */
-export const AGENT_PROMPT_CHIPS = [
-  {
-    id: "deep-research",
-    label: "Deep research",
-    prompt:
-      "Research {{input.topic}} thoroughly. Compare competing views, cite sources, and write a concise brief with clear takeaways.",
-  },
-  {
-    id: "competitive",
-    label: "Competitive scan",
-    prompt:
-      "Run a competitive scan on {{input.topic}}. Summarize products, positioning, recent news, and open questions with citations.",
-  },
-  {
-    id: "analyze-rows",
-    label: "Analyze + dashboard",
-    prompt:
-      "Analyze these rows. Surface the top insights, write a cleaned table, and build an HTML KPI dashboard from {{input}}.",
-  },
-  {
-    id: "kpi-dashboard",
-    label: "KPI dashboard",
-    prompt:
-      "Build a KPI dashboard from {{input}}. Include summary metrics, a cleaned table, and a self-contained HTML dashboard.",
-  },
-] as const;
