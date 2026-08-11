@@ -134,17 +134,17 @@ function QuestionsCard({
         const selectedOptions = new Set(selected[question.id] ?? []);
         return (
           <div className="chat-question" key={question.id}>
-            <p className="chat-question-prompt">
+            <div className="chat-question-meta">
               {questions.length > 1 && (
                 <span className="t-mono chat-question-num">
                   {index + 1}/{questions.length}
                 </span>
               )}
-              {question.prompt}
               <span className="chat-question-hint">
                 {question.allowMultiple ? "Choose any" : "Choose one"}
               </span>
-            </p>
+            </div>
+            <p className="chat-question-prompt">{question.prompt}</p>
             <div className="chip-row">
               {question.options.map((option) => {
                 const isSelected = selectedOptions.has(option.id);
@@ -164,7 +164,7 @@ function QuestionsCard({
             </div>
             <input
               type="text"
-              className="chat-question-other"
+              className={`chat-question-other ${(freeText[question.id] ?? "").trim() ? "has-value" : ""}`}
               placeholder="Something else…"
               value={freeText[question.id] ?? ""}
               onChange={(event) =>
@@ -176,7 +176,7 @@ function QuestionsCard({
       })}
       <div className="chat-questions-actions">
         <span className="chat-questions-progress">
-          {answeredCount}/{questions.length} answered
+          {answeredCount} of {questions.length} answered
         </span>
         <button
           type="button"
