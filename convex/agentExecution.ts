@@ -35,6 +35,7 @@ import { clampSearchResultCount, parseExaSearchResponse } from "../shared/webSea
 import { internal } from "./_generated/api";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { publicGitUrl, safeSandboxPath, structuredProcessOutput } from "./daytonaPolicy";
+import { LIVE_OUTPUT_CHARS, LIVE_TRACE_ENTRIES } from "./liveState";
 
 type ToolCall = {
   id: string;
@@ -347,8 +348,8 @@ async function patchPartial(
   // live activity rows instead of a "Tools so far" text dump.
   await ctx.runMutation(internal.executor.updateStepPartialOutput, {
     stepRunId,
-    partialOutput: content.trim().slice(-100_000),
-    toolTrace: toolTrace.slice(-200),
+    partialOutput: content.trim().slice(-LIVE_OUTPUT_CHARS),
+    toolTrace: toolTrace.slice(-LIVE_TRACE_ENTRIES),
   });
 }
 

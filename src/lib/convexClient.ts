@@ -19,6 +19,7 @@ export const removeWorkflowRef = api.workflows.remove;
 export const startRunRef = api.runs.startRun;
 export const retryRunRef = api.runs.retry;
 export const getRunRef = api.runs.get;
+export const getLiveRunRef = api.runs.getLive;
 export const latestRunRef = api.runs.latestForWorkflow;
 export const approveRunRef = api.runs.approve;
 export const decidePlanRef = api.runs.decidePlan;
@@ -33,6 +34,7 @@ export const disconnectSlackRef = api.connectionActions.disconnectSlack;
 
 export type StoredWorkflow = NonNullable<FunctionReturnType<typeof getWorkflowRef>>;
 export type StoredRun = NonNullable<FunctionReturnType<typeof getRunRef>>;
+export type StoredLiveRun = NonNullable<FunctionReturnType<typeof getLiveRunRef>>;
 export type StoredStepRun = StoredRun["steps"][number];
 export type ConnectionMetadata = FunctionReturnType<typeof listConnectionsRef>[number];
 export type BuildChatMessage = FunctionReturnType<typeof listBuildChatMessagesRef>[number];

@@ -24,6 +24,20 @@ import { clampSearchResultCount } from "../shared/webSearch";
 import { applyOpenRouterEvent, takeSseEvents, type OpenRouterStreamState } from "./openrouterStream";
 import { applyApprovalDecision } from "./policies";
 import { renderTemplate, valueAtPath } from "./template";
+import {
+  compactLiveValue,
+  getAgentTaskLiveState,
+  getStepLiveState,
+  LIVE_AGENT_OUTPUT_CHARS,
+  LIVE_AGENT_CONTENT_CHARS,
+  LIVE_AGENT_OBJECTIVE_CHARS,
+  LIVE_OUTPUT_CHARS,
+  LIVE_TRACE_ENTRIES,
+  LIVE_UPDATE_INTERVAL_MS,
+  patchAgentTaskLiveState,
+  patchRunLiveState,
+  patchStepLiveState,
+} from "./liveState";
 
 export const workflow = new WorkflowManager(components.workflow, {
   // Eight-way research fan-outs are a first-class workflow shape. Keep a
@@ -150,6 +164,7 @@ export const startStep = internalMutation({
     const run = await ctx.db.get(args.runId);
     if (!run?.ownerKey) throw new Error("Run ownership is invalid.");
     await ctx.db.patch(args.runId, { status: args.waiting ? "waiting" : "running" });
+    await patchRunLiveState(ctx, args.runId, { status: args.waiting ? "waiting" : "running" });
     const stepRunId = await ctx.db.insert("stepRuns", {
       ownerKey: run.ownerKey,
       runId: args.runId,
@@ -161,6 +176,18 @@ export const startStep = internalMutation({
       input: runRecordValue(args.input),
       status: args.waiting ? "waiting" : "running",
       startedAt: Date.now(),
+    });
+    await ctx.db.insert("stepLiveStates", {
+      ownerKey: run.ownerKey,
+      runId: args.runId,
+      stepRunId,
+      nodeId: args.nodeId,
+      nodeLabel: args.nodeLabel,
+      nodeType: args.nodeType,
+      status: args.waiting ? "waiting" : "running",
+      input: compactLiveValue(args.input),
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
     });
     const provider = connectorProviders[args.nodeType];
     if (provider) {
@@ -188,6 +215,13 @@ export const finishStep = internalMutation({
   handler: async (ctx, { stepRunId, output }) => {
     const stepRun = await ctx.db.get(stepRunId);
     await ctx.db.patch(stepRunId, { status: "completed", output: runRecordValue(output), completedAt: Date.now() });
+    await patchStepLiveState(ctx, stepRunId, {
+      status: "completed",
+      input: undefined,
+      partialOutput: undefined,
+      partialToolTrace: undefined,
+      completedAt: Date.now(),
+    });
     if (stepRun && connectorProviders[stepRun.nodeType]) await ctx.db.insert("auditLogs", { ownerKey: stepRun.ownerKey, runId: stepRun.runId, stepRunId, event: "connector.use", provider: connectorProviders[stepRun.nodeType], connectionRef: stepRun.connectionRef, outcome: "succeeded", actor: "workflow-engine", createdAt: Date.now() });
   },
 });
@@ -213,6 +247,14 @@ export const proposeStepPlan = internalMutation({
       },
     });
     await ctx.db.patch(stepRun.runId, { status: "waiting" });
+    await patchStepLiveState(ctx, stepRunId, {
+      status: "waiting",
+      plan: {
+        steps: steps.map((title) => ({ title, status: "pending" as const })),
+        status: "proposed" as const,
+      },
+    });
+    await patchRunLiveState(ctx, stepRun.runId, { status: "waiting" });
   },
 });
 
@@ -229,6 +271,13 @@ export const applyPlanDecision = internalMutation({
     if (!stepRun) throw new Error("Workflow step not found.");
     if (!approved) {
       await ctx.db.patch(stepRunId, {
+        plan: {
+          steps: stepRun.plan?.steps ?? [],
+          status: "rejected" as const,
+          ...(note ? { note } : {}),
+        },
+      });
+      await patchStepLiveState(ctx, stepRunId, {
         plan: {
           steps: stepRun.plan?.steps ?? [],
           status: "rejected" as const,
@@ -253,6 +302,15 @@ export const applyPlanDecision = internalMutation({
       },
     });
     await ctx.db.patch(stepRun.runId, { status: "running" });
+    await patchStepLiveState(ctx, stepRunId, {
+      status: "running",
+      plan: {
+        steps: finalTitles.map((title) => ({ title, status: "pending" as const })),
+        status: "approved" as const,
+        ...(note ? { note } : {}),
+      },
+    });
+    await patchRunLiveState(ctx, stepRun.runId, { status: "running" });
   },
 });
 
@@ -270,6 +328,7 @@ export const updateStepPlanProgress = internalMutation({
     if (stepIndex < 0 || stepIndex >= steps.length) return;
     steps[stepIndex] = { ...steps[stepIndex], status };
     await ctx.db.patch(stepRunId, { plan: { ...stepRun.plan, steps } });
+    await patchStepLiveState(ctx, stepRunId, { plan: { ...stepRun.plan, steps } });
   },
 });
 
@@ -290,11 +349,12 @@ export const updateStepPartialOutput = internalMutation({
     ),
   },
   handler: async (ctx, { stepRunId, partialOutput, toolTrace }) => {
-    const stepRun = await ctx.db.get(stepRunId);
-    if (!stepRun || stepRun.status !== "running") return;
-    await ctx.db.patch(stepRunId, {
-      partialOutput,
-      ...(toolTrace ? { partialToolTrace: toolTrace } : {}),
+    const live = await getStepLiveState(ctx, stepRunId);
+    if (!live || live.status !== "running") return;
+    await ctx.db.patch(live._id, {
+      partialOutput: partialOutput.slice(-LIVE_OUTPUT_CHARS),
+      ...(toolTrace ? { partialToolTrace: toolTrace.slice(-LIVE_TRACE_ENTRIES) } : {}),
+      updatedAt: Date.now(),
     });
   },
 });
@@ -347,6 +407,21 @@ export const registerAgentTasks = internalMutation({
           startedAt: Date.now(),
           completedAt: undefined,
         });
+        const previousLive = await getAgentTaskLiveState(ctx, previous._id);
+        const liveValue = {
+          ownerKey: stepRun.ownerKey,
+          runId: stepRun.runId,
+          stepRunId,
+          agentTaskId: previous._id,
+          name: task.name,
+          objective: task.objective.slice(0, LIVE_AGENT_OBJECTIVE_CHARS),
+          status: "queued" as const,
+          attempt: previous.attempt + 1,
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        if (previousLive) await ctx.db.replace(previousLive._id, liveValue);
+        else await ctx.db.insert("agentTaskLiveStates", liveValue);
         registrations.push({ id: previous._id, cached: false });
         continue;
       }
@@ -356,10 +431,22 @@ export const registerAgentTasks = internalMutation({
         stepRunId,
         taskKey,
         name: task.name,
+        objective: task.objective.slice(0, LIVE_AGENT_OBJECTIVE_CHARS),
+        status: "queued",
+        attempt: 1,
+        startedAt: Date.now(),
+      });
+      await ctx.db.insert("agentTaskLiveStates", {
+        ownerKey: stepRun.ownerKey,
+        runId: stepRun.runId,
+        stepRunId,
+        agentTaskId: id,
+        name: task.name,
         objective: task.objective,
         status: "queued",
         attempt: 1,
         startedAt: Date.now(),
+        updatedAt: Date.now(),
       });
       registrations.push({ id, cached: false });
     }
@@ -378,18 +465,38 @@ export const updateAgentTask = internalMutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const task = await ctx.db.get(args.agentTaskId);
-    if (!task) return;
+    const live = await getAgentTaskLiveState(ctx, args.agentTaskId);
+    if (!live) return;
     const terminal = args.status === "completed" || args.status === "failed";
-    await ctx.db.patch(args.agentTaskId, {
+    await ctx.db.patch(live._id, {
       status: args.status,
-      ...(args.partialOutput !== undefined ? { partialOutput: args.partialOutput.slice(-40_000) } : {}),
-      ...(args.toolTrace ? { toolTrace: args.toolTrace.slice(-100) } : {}),
-      ...(args.content !== undefined ? { content: args.content.slice(0, 80_000) } : {}),
-      ...(args.citations ? { citations: args.citations.slice(0, 100) } : {}),
+      ...(terminal
+        ? {
+            partialOutput: undefined,
+            toolTrace: undefined,
+            content: args.content?.slice(0, LIVE_AGENT_CONTENT_CHARS),
+            citations: undefined,
+          }
+        : {
+            ...(args.partialOutput !== undefined ? { partialOutput: args.partialOutput.slice(-LIVE_AGENT_OUTPUT_CHARS) } : {}),
+            ...(args.toolTrace ? { toolTrace: args.toolTrace.slice(-LIVE_TRACE_ENTRIES) } : {}),
+          }),
       ...(args.error !== undefined ? { error: args.error.slice(0, 1_000) } : {}),
       ...(terminal ? { completedAt: Date.now() } : {}),
+      updatedAt: Date.now(),
     });
+    if (terminal || live.status !== args.status) {
+      const task = await ctx.db.get(args.agentTaskId);
+      if (!task) return;
+      await ctx.db.patch(args.agentTaskId, {
+        status: args.status,
+        ...(terminal && args.toolTrace ? { toolTrace: args.toolTrace.slice(-100) } : {}),
+        ...(terminal && args.content !== undefined ? { content: args.content.slice(0, 80_000) } : {}),
+        ...(terminal && args.citations ? { citations: args.citations.slice(0, 100) } : {}),
+        ...(args.error !== undefined ? { error: args.error.slice(0, 1_000) } : {}),
+        ...(terminal ? { partialOutput: undefined, completedAt: Date.now() } : {}),
+      });
+    }
   },
 });
 
@@ -398,10 +505,19 @@ export const failStep = internalMutation({
   handler: async (ctx, { stepRunId, error }) => {
     const stepRun = await ctx.db.get(stepRunId);
     await ctx.db.patch(stepRunId, { status: "failed", error, completedAt: Date.now() });
+    await patchStepLiveState(ctx, stepRunId, { status: "failed", error: error.slice(0, 1_000), completedAt: Date.now() });
     const childTasks = await ctx.db.query("agentTasks").withIndex("by_step", (q) => q.eq("stepRunId", stepRunId)).collect();
     await Promise.all(childTasks.flatMap((task) =>
       task.status === "queued" || task.status === "running"
         ? [ctx.db.patch(task._id, {
+            status: "failed",
+            error: "Parent agent step stopped before this subagent completed.",
+            completedAt: Date.now(),
+          })]
+        : []));
+    await Promise.all(childTasks.flatMap((task) =>
+      task.status === "queued" || task.status === "running"
+        ? [patchAgentTaskLiveState(ctx, task._id, {
             status: "failed",
             error: "Parent agent step stopped before this subagent completed.",
             completedAt: Date.now(),
@@ -416,7 +532,7 @@ export const skipStep = internalMutation({
   handler: async (ctx, { runId, node }) => {
     const run = await ctx.db.get(runId);
     if (!run?.ownerKey) throw new Error("Run ownership is invalid.");
-    return ctx.db.insert("stepRuns", {
+    const stepRunId = await ctx.db.insert("stepRuns", {
       ownerKey: run.ownerKey,
       runId,
       nodeId: String(node.id),
@@ -426,19 +542,38 @@ export const skipStep = internalMutation({
       startedAt: Date.now(),
       completedAt: Date.now(),
     });
+    await ctx.db.insert("stepLiveStates", {
+      ownerKey: run.ownerKey,
+      runId,
+      stepRunId,
+      nodeId: String(node.id),
+      nodeLabel: String(node.data.label),
+      nodeType: String(node.data.nodeType),
+      status: "skipped",
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return stepRunId;
   },
 });
 
 export const completeRun = internalMutation({
   args: { runId: v.id("workflowRuns"), output: v.any() },
-  handler: async (ctx, { runId, output }) =>
-    ctx.db.patch(runId, { status: "completed", output: runRecordValue(output), completedAt: Date.now() }),
+  handler: async (ctx, { runId, output }) => {
+    const completedAt = Date.now();
+    await ctx.db.patch(runId, { status: "completed", output: runRecordValue(output), completedAt });
+    await patchRunLiveState(ctx, runId, { status: "completed", completedAt });
+  },
 });
 
 export const failRun = internalMutation({
   args: { runId: v.id("workflowRuns"), error: v.string() },
-  handler: async (ctx, { runId, error }) =>
-    ctx.db.patch(runId, { status: "failed", error, completedAt: Date.now() }),
+  handler: async (ctx, { runId, error }) => {
+    const completedAt = Date.now();
+    await ctx.db.patch(runId, { status: "failed", error, completedAt });
+    await patchRunLiveState(ctx, runId, { status: "failed", error: error.slice(0, 1_000), completedAt });
+  },
 });
 
 export const executeNode = internalAction({
@@ -606,10 +741,10 @@ export const executeNode = internalAction({
       const patchPartialOutput = async (force = false) => {
         if (!stepRunId || !streamState.content || streamState.content === lastPatchedContent) return;
         const now = Date.now();
-        if (!force && now - lastPatchAt < 200) return;
+        if (!force && now - lastPatchAt < LIVE_UPDATE_INTERVAL_MS) return;
         await ctx.runMutation(internal.executor.updateStepPartialOutput, {
           stepRunId,
-          partialOutput: streamState.content,
+          partialOutput: streamState.content.slice(-LIVE_OUTPUT_CHARS),
         });
         lastPatchAt = Date.now();
         lastPatchedContent = streamState.content;

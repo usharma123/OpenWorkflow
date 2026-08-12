@@ -1,9 +1,9 @@
 import { useQuery } from "convex/react";
 import { ChevronRight, History } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Id } from "../../convex/_generated/dataModel";
 import { RunTranscript } from "../components/RunTranscript";
-import { listRunsRef, listWorkflowsRef } from "../lib/convexClient";
+import { convexClient, getRunRef, listRunsRef, listWorkflowsRef, type StoredRun } from "../lib/convexClient";
 import type { LatestRunResult, RunStepSummary } from "../types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -29,6 +29,22 @@ export function RunsRoute() {
   const workflowId = selectedWorkflowId ?? workflows?.[0]?._id;
   const runs = useQuery(listRunsRef, workflowId ? { workflowId } : "skip");
   const [openRunId, setOpenRunId] = useState<string>();
+  const [details, setDetails] = useState<Record<string, StoredRun>>({});
+  const [detailError, setDetailError] = useState<string>();
+
+  useEffect(() => {
+    if (!openRunId || details[openRunId] || !convexClient) return;
+    let disposed = false;
+    setDetailError(undefined);
+    void convexClient.query(getRunRef, { runId: openRunId as Id<"workflowRuns"> }).then((run) => {
+      if (disposed) return;
+      if (run) setDetails((current) => ({ ...current, [openRunId]: run }));
+      else setDetailError("Run details are no longer available.");
+    }).catch((error) => {
+      if (!disposed) setDetailError(error instanceof Error ? error.message : "Could not load run details.");
+    });
+    return () => { disposed = true; };
+  }, [details, openRunId]);
 
   return (
     <div className="page">
@@ -66,7 +82,8 @@ export function RunsRoute() {
 
       <div className="stack">
         {runs?.map((run) => {
-          const steps: RunStepSummary[] = run.steps.map((step) => ({
+          const detail = details[run._id];
+          const steps: RunStepSummary[] = (detail?.steps ?? []).map((step) => ({
             id: step._id,
             nodeId: step.nodeId,
             nodeLabel: step.nodeLabel,
@@ -84,8 +101,8 @@ export function RunsRoute() {
           const result: LatestRunResult = {
             id: run._id,
             status: run.status,
-            output: run.output,
-            error: run.error,
+            output: detail?.output,
+            error: run.error ?? detail?.error,
             steps,
           };
           const isOpen = openRunId === run._id;
@@ -103,7 +120,7 @@ export function RunsRoute() {
                 <span className="row-copy">
                   <strong>{formatWhen(run.startedAt)}</strong>
                   <small>
-                    {run.trigger} · {steps.length} {steps.length === 1 ? "step" : "steps"}
+                    {run.trigger}{detail ? ` · ${steps.length} ${steps.length === 1 ? "step" : "steps"}` : ""}
                   </small>
                 </span>
                 <span className="row-actions">
@@ -119,15 +136,17 @@ export function RunsRoute() {
 
               {isOpen && (
                 <div className="run-detail">
-                  <RunTranscript
-                    result={result}
-                    approvalBusy={false}
-                    onApproval={() => undefined}
-                    planBusy={false}
-                    onPlanDecision={() => undefined}
-                    onRun={() => undefined}
-                    running={false}
-                  />
+                  {!detail && !detailError && <p className="t-small t-muted">Loading run details…</p>}
+                  {detailError && <p className="t-small">{detailError}</p>}
+                  {detail && <RunTranscript
+                      result={result}
+                      approvalBusy={false}
+                      onApproval={() => undefined}
+                      planBusy={false}
+                      onPlanDecision={() => undefined}
+                      onRun={() => undefined}
+                      running={false}
+                    />}
                 </div>
               )}
             </div>

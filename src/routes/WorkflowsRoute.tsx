@@ -155,7 +155,7 @@ export function WorkflowsRoute() {
                   <span className="row-mark"><WorkflowMark size={16} /></span>
                   <span className="row-copy">
                     <strong>{workflow.name}</strong>
-                    <small>{workflow.nodes.length} steps · edited {formatWhen(workflow.updatedAt)}</small>
+                    <small>{workflow.nodeCount} steps · edited {formatWhen(workflow.updatedAt)}</small>
                   </span>
                 </Link>
               )}

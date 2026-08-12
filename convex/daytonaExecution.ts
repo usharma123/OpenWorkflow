@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { daytonaCreateConfig, publicGitUrl, safeSandboxPath, structuredProcessOutput } from "./daytonaPolicy";
+import { LIVE_OUTPUT_CHARS, LIVE_UPDATE_INTERVAL_MS } from "./liveState";
 
 type WorkflowNode = {
   id: string;
@@ -70,9 +71,9 @@ async function streamCommand(
   let patchQueue = Promise.resolve<unknown>(undefined);
   const patchOutput = () => {
     const now = Date.now();
-    if (now - lastPatchAt < 200) return;
+    if (now - lastPatchAt < LIVE_UPDATE_INTERVAL_MS) return;
     lastPatchAt = now;
-    const partialOutput = `${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`.slice(-100_000);
+    const partialOutput = `${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`.slice(-LIVE_OUTPUT_CHARS);
     patchQueue = patchQueue.then(() => ctx.runMutation(internal.executor.updateStepPartialOutput, {
       stepRunId,
       partialOutput,
@@ -96,7 +97,7 @@ async function streamCommand(
     const output = structuredProcessOutput(stdout, stderr, completed.exitCode ?? 1);
     await ctx.runMutation(internal.executor.updateStepPartialOutput, {
       stepRunId,
-      partialOutput: `${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`.slice(-100_000),
+      partialOutput: `${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`.slice(-LIVE_OUTPUT_CHARS),
     });
     return output;
   } finally {
@@ -139,7 +140,7 @@ export const execute = internalAction({
         output = structuredProcessOutput(result.result, "", result.exitCode);
         await ctx.runMutation(internal.executor.updateStepPartialOutput, {
           stepRunId: args.stepRunId,
-          partialOutput: result.result.slice(-100_000),
+          partialOutput: result.result.slice(-LIVE_OUTPUT_CHARS),
         });
       } else if (node.data.nodeType === "shell") {
         const command = String(config.command ?? "");

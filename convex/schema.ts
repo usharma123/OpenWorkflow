@@ -33,6 +33,36 @@ export default defineSchema({
     .index("by_published_webhook_slug_secret", ["publishedWebhookSlug", "webhookSecret"])
     .index("by_enabled", ["enabled"]),
 
+  /** Small metadata rows keep workflow listings and version pickers from
+   * reading the full graph documents. */
+  workflowSummaries: defineTable({
+    ownerKey: v.string(),
+    workflowId: v.id("workflows"),
+    externalId: v.string(),
+    name: v.string(),
+    enabled: v.boolean(),
+    nodeCount: v.number(),
+    version: v.number(),
+    currentVersionId: v.optional(v.id("workflowVersions")),
+    publishedVersionId: v.optional(v.id("workflowVersions")),
+    publishedVersion: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_workflow", ["workflowId"])
+    .index("by_owner_external_id", ["ownerKey", "externalId"])
+    .index("by_owner_updated_at", ["ownerKey", "updatedAt"]),
+
+  workflowVersionSummaries: defineTable({
+    ownerKey: v.string(),
+    workflowId: v.id("workflows"),
+    workflowVersionId: v.id("workflowVersions"),
+    version: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_workflow_version", ["workflowId", "version"])
+    .index("by_version_id", ["workflowVersionId"]),
+
   workflowVersions: defineTable({
     ownerKey: v.string(),
     workflowId: v.id("workflows"),
@@ -72,11 +102,117 @@ export default defineSchema({
     error: v.optional(v.string()),
     startedAt: v.number(),
     completedAt: v.optional(v.number()),
+    engineHistoryCleanedAt: v.optional(v.number()),
   })
     .index("by_workflow", ["workflowId"])
     .index("by_workflow_status", ["workflowId", "status"])
     .index("by_status", ["status"])
+    .index("by_status_engine_cleaned", ["status", "engineHistoryCleanedAt"])
     .index("by_owner_started_at", ["ownerKey", "startedAt"]),
+
+  /** Bounded, frequently updated state for reactive clients. Large inputs,
+   * outputs, and traces remain in the archival run tables and are fetched
+   * only on demand. */
+  runLiveStates: defineTable({
+    ownerKey: v.string(),
+    workflowId: v.id("workflows"),
+    externalWorkflowId: v.string(),
+    runId: v.id("workflowRuns"),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("waiting"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    trigger: v.string(),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_run", ["runId"])
+    .index("by_owner_workflow_started_at", ["ownerKey", "workflowId", "startedAt"])
+    .index("by_owner_external_started_at", ["ownerKey", "externalWorkflowId", "startedAt"]),
+
+  stepLiveStates: defineTable({
+    ownerKey: v.string(),
+    runId: v.id("workflowRuns"),
+    stepRunId: v.id("stepRuns"),
+    nodeId: v.string(),
+    nodeLabel: v.string(),
+    nodeType: v.string(),
+    status: v.union(
+      v.literal("running"),
+      v.literal("waiting"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    input: v.optional(v.any()),
+    partialOutput: v.optional(v.string()),
+    partialToolTrace: v.optional(
+      v.array(v.object({
+        tool: v.string(),
+        summary: v.string(),
+        ok: v.boolean(),
+        stepIndex: v.optional(v.number()),
+        stepStatus: v.optional(v.string()),
+      })),
+    ),
+    error: v.optional(v.string()),
+    plan: v.optional(
+      v.object({
+        steps: v.array(v.object({
+          title: v.string(),
+          status: v.union(
+            v.literal("pending"),
+            v.literal("active"),
+            v.literal("done"),
+            v.literal("skipped"),
+          ),
+        })),
+        status: v.union(v.literal("proposed"), v.literal("approved"), v.literal("rejected")),
+        note: v.optional(v.string()),
+      }),
+    ),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_run", ["runId"])
+    .index("by_step", ["stepRunId"]),
+
+  agentTaskLiveStates: defineTable({
+    ownerKey: v.string(),
+    runId: v.id("workflowRuns"),
+    stepRunId: v.id("stepRuns"),
+    agentTaskId: v.id("agentTasks"),
+    name: v.string(),
+    objective: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    attempt: v.number(),
+    partialOutput: v.optional(v.string()),
+    toolTrace: v.optional(v.array(v.object({
+      tool: v.string(),
+      summary: v.string(),
+      ok: v.boolean(),
+    }))),
+    content: v.optional(v.string()),
+    citations: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
+    error: v.optional(v.string()),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_run", ["runId"])
+    .index("by_step", ["stepRunId"])
+    .index("by_task", ["agentTaskId"]),
 
   stepRuns: defineTable({
     ownerKey: v.optional(v.string()),

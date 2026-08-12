@@ -1,4 +1,4 @@
-import { sendEvent, start } from "@convex-dev/workflow";
+import { cleanup, sendEvent, start } from "@convex-dev/workflow";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
@@ -9,6 +9,8 @@ import { workflowConcurrencyLimit } from "../shared/reliability";
 import { MAX_PLAN_STEPS } from "../shared/agentTools";
 import { topologicalBatches } from "../shared/executionGraph";
 import { compactAgentOutput } from "../shared/executionPayload";
+import { patchAgentTaskLiveState, patchRunLiveState, patchStepLiveState } from "./liveState";
+import { insertWorkflowVersionSummary, upsertWorkflowSummary } from "./summaries";
 
 const workflowResultValidator = v.union(
   v.object({ kind: v.literal("success"), returnValue: v.any() }),
@@ -31,15 +33,18 @@ async function markRunFailed(
   if (!run || run.status === "completed" || run.status === "failed") return;
   const completedAt = Date.now();
   await ctx.db.patch(runId, { status: "failed", error: error.slice(0, 1_000), completedAt });
+  await patchRunLiveState(ctx, runId, { status: "failed", error: error.slice(0, 1_000), completedAt });
   const steps = await ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
   for (const step of steps) {
     if (step.status !== "running" && step.status !== "waiting") continue;
     await ctx.db.patch(step._id, { status: "failed", error: error.slice(0, 1_000), completedAt });
+    await patchStepLiveState(ctx, step._id, { status: "failed", error: error.slice(0, 1_000), completedAt });
   }
   const agentTasks = await ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", runId)).collect();
   for (const task of agentTasks) {
     if (task.status !== "queued" && task.status !== "running") continue;
     await ctx.db.patch(task._id, { status: "failed", error: "Parent workflow stopped.", completedAt });
+    await patchAgentTaskLiveState(ctx, task._id, { status: "failed", error: "Parent workflow stopped.", completedAt });
   }
 }
 
@@ -50,12 +55,14 @@ export const handleWorkflowComplete = internalMutation({
     context: v.object({ runId: v.id("workflowRuns") }),
     result: workflowResultValidator,
   },
-  handler: async (ctx, { context, result }) => {
+  handler: async (ctx, { workflowId, context, result }) => {
     if (result.kind === "failed") {
       await markRunFailed(ctx, context.runId, workflowFailureMessage(result.error));
     } else if (result.kind === "canceled") {
       await markRunFailed(ctx, context.runId, "Workflow execution was canceled.");
     }
+    const cleaned = await cleanup(ctx, components.workflow, workflowId as never);
+    if (cleaned) await ctx.db.patch(context.runId, { engineHistoryCleanedAt: Date.now() });
   },
 });
 
@@ -115,6 +122,14 @@ export async function ensureWorkflowVersion(ctx: MutationCtx, definition: Doc<"w
     createdAt: Date.now(),
   });
   await ctx.db.patch(definition._id, { currentVersionId: workflowVersionId, version });
+  await insertWorkflowVersionSummary(ctx, {
+    ownerKey: definition.ownerKey!,
+    workflowId: definition._id,
+    workflowVersionId,
+    version,
+    createdAt: Date.now(),
+  });
+  await upsertWorkflowSummary(ctx, { ...definition, currentVersionId: workflowVersionId, version });
   return (await ctx.db.get(workflowVersionId))!;
 }
 
@@ -171,6 +186,16 @@ export async function createPinnedRun(
     input,
     startedAt: Date.now(),
   });
+  await ctx.db.insert("runLiveStates", {
+    ownerKey: definition.ownerKey,
+    workflowId: definition._id,
+    externalWorkflowId: definition.externalId,
+    runId,
+    status: "queued",
+    trigger,
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+  });
   if (idempotencyKey) {
     await ctx.db.insert("runClaims", { workflowId: definition._id, idempotencyKey, runId, createdAt: Date.now() });
   }
@@ -186,27 +211,79 @@ export const listForWorkflow = query({
   args: { workflowId: v.id("workflows") },
   handler: async (ctx, { workflowId }) => {
     const principal = await requirePrincipal(ctx);
-    const workflow = await ctx.db.get(workflowId);
-    if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
-    const runs = await ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).order("desc").take(25);
-    const ownedRuns = runs.reduce<typeof runs>((owned, run) => {
-      if (run.ownerKey === principal.ownerKey) owned.push(run);
-      return owned;
-    }, []);
-    return Promise.all(ownedRuns.map(async (run) => {
-      const [steps, agentTasks] = await Promise.all([
-        ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
-        ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
-      ]);
-      const runtimeAgents = agentsByStep(agentTasks, false);
-      return {
-        ...run,
-        steps: steps.map((step) => ({
-          ...step,
-          agents: runtimeAgents.get(String(step._id)) ?? [],
+    return ctx.db
+      .query("runLiveStates")
+      .withIndex("by_owner_workflow_started_at", (q) =>
+        q.eq("ownerKey", principal.ownerKey).eq("workflowId", workflowId))
+      .order("desc")
+      .take(25)
+      .then((runs) => runs.map((run) => ({
+        _id: run.runId,
+        workflowId: run.workflowId,
+        status: run.status,
+        trigger: run.trigger,
+        startedAt: run.startedAt,
+        completedAt: run.completedAt,
+        error: run.error,
+      })));
+  },
+});
+
+export const getLive = query({
+  args: { runId: v.id("workflowRuns") },
+  handler: async (ctx, { runId }) => {
+    const principal = await requirePrincipal(ctx);
+    const live = await ctx.db.query("runLiveStates").withIndex("by_run", (q) => q.eq("runId", runId)).unique();
+    if (!live || live.ownerKey !== principal.ownerKey) return null;
+    const [steps, agentTasks] = await Promise.all([
+      ctx.db.query("stepLiveStates").withIndex("by_run", (q) => q.eq("runId", runId)).collect(),
+      ctx.db.query("agentTaskLiveStates").withIndex("by_run", (q) => q.eq("runId", runId)).collect(),
+    ]);
+    const agents = new Map<string, typeof agentTasks>();
+    for (const task of agentTasks) {
+      if (task.ownerKey !== principal.ownerKey) continue;
+      const key = String(task.stepRunId);
+      agents.set(key, [...(agents.get(key) ?? []), task]);
+    }
+    return {
+      _id: live.runId,
+      status: live.status,
+      trigger: live.trigger,
+      startedAt: live.startedAt,
+      completedAt: live.completedAt,
+      error: live.error,
+      updatedAt: live.updatedAt,
+      steps: steps
+        .filter((step) => step.ownerKey === principal.ownerKey)
+        .map((step) => ({
+          _id: step.stepRunId,
+          nodeId: step.nodeId,
+          nodeLabel: step.nodeLabel,
+          nodeType: step.nodeType,
+          status: step.status,
+          input: step.input,
+          partialOutput: step.partialOutput,
+          partialToolTrace: step.partialToolTrace,
+          error: step.error,
+          plan: step.plan,
+          startedAt: step.startedAt,
+          completedAt: step.completedAt,
+          agents: (agents.get(String(step.stepRunId)) ?? []).map((task) => ({
+            id: task.agentTaskId,
+            name: task.name,
+            objective: task.objective,
+            status: task.status,
+            attempt: task.attempt,
+            partialOutput: task.partialOutput,
+            toolTrace: task.toolTrace,
+            content: task.content,
+            citations: task.citations,
+            error: task.error,
+            startedAt: task.startedAt,
+            completedAt: task.completedAt,
+          })),
         })),
-      };
-    }));
+    };
   },
 });
 
@@ -239,33 +316,60 @@ export const latestForWorkflow = query({
   args: { externalWorkflowId: v.string() },
   handler: async (ctx, { externalWorkflowId }) => {
     const principal = await requirePrincipal(ctx);
-    const workflow = await ctx.db
-      .query("workflows")
-      .withIndex("by_owner_external_id", (q) =>
-        q.eq("ownerKey", principal.ownerKey).eq("externalId", externalWorkflowId))
-      .unique();
-    if (!workflow) return null;
-    const run = await ctx.db
-      .query("workflowRuns")
-      .withIndex("by_workflow", (q) => q.eq("workflowId", workflow._id))
+    const live = await ctx.db
+      .query("runLiveStates")
+      .withIndex("by_owner_external_started_at", (q) =>
+        q.eq("ownerKey", principal.ownerKey).eq("externalWorkflowId", externalWorkflowId))
       .order("desc")
       .first();
-    if (!run || run.ownerKey !== principal.ownerKey) return null;
+    if (!live) return null;
     const [steps, agentTasks] = await Promise.all([
-      ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
-      ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+      ctx.db.query("stepLiveStates").withIndex("by_run", (q) => q.eq("runId", live.runId)).collect(),
+      ctx.db.query("agentTaskLiveStates").withIndex("by_run", (q) => q.eq("runId", live.runId)).collect(),
     ]);
-    const runtimeAgents = agentsByStep(
-      agentTasks.filter((task) => task.ownerKey === principal.ownerKey),
-      true,
-    );
+    const runtimeAgents = new Map<string, typeof agentTasks>();
+    for (const task of agentTasks) {
+      if (task.ownerKey !== principal.ownerKey) continue;
+      const key = String(task.stepRunId);
+      runtimeAgents.set(key, [...(runtimeAgents.get(key) ?? []), task]);
+    }
     return {
-      ...run,
+      _id: live.runId,
+      status: live.status,
+      trigger: live.trigger,
+      startedAt: live.startedAt,
+      completedAt: live.completedAt,
+      error: live.error,
+      updatedAt: live.updatedAt,
       steps: steps
         .filter((step) => step.ownerKey === principal.ownerKey)
         .map((step) => ({
-          ...step,
-          agents: runtimeAgents.get(String(step._id)) ?? [],
+          _id: step.stepRunId,
+          nodeId: step.nodeId,
+          nodeLabel: step.nodeLabel,
+          nodeType: step.nodeType,
+          status: step.status,
+          input: step.input,
+          partialOutput: step.partialOutput,
+          partialToolTrace: step.partialToolTrace,
+          error: step.error,
+          plan: step.plan,
+          startedAt: step.startedAt,
+          completedAt: step.completedAt,
+          agents: (runtimeAgents.get(String(step.stepRunId)) ?? []).map((task) => ({
+            id: task.agentTaskId,
+            name: task.name,
+            objective: task.objective,
+            status: task.status,
+            attempt: task.attempt,
+            partialOutput: task.partialOutput,
+            toolTrace: task.toolTrace,
+            content: task.content,
+            citations: task.citations,
+            error: task.error,
+            startedAt: task.startedAt,
+            completedAt: task.completedAt,
+          })),
         })),
     };
   },
@@ -376,6 +480,16 @@ export const retry = mutation({
       seedOutputs,
       input: previous.input,
       startedAt: Date.now(),
+    });
+    await ctx.db.insert("runLiveStates", {
+      ownerKey: principal.ownerKey,
+      workflowId: definition._id,
+      externalWorkflowId: definition.externalId,
+      runId: retryRunId,
+      status: "queued",
+      trigger: "retry",
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
     });
     const workflowEngineId = await start(ctx, internal.executor.executeWorkflow, { runId: retryRunId }, {
       onComplete: internal.runs.handleWorkflowComplete,

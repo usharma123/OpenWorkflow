@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { requirePrincipal } from "./auth";
 import { validateWorkflowGraph } from "./policies";
 import { ensureWorkflowVersion } from "./runs";
+import { insertWorkflowVersionSummary, upsertWorkflowSummary } from "./summaries";
 
 const GOOGLE_CONNECTOR_NODE_TYPES = [
   "gmailTrigger", "gmailEventTrigger", "calendarTrigger", "driveTrigger", "sheetsTrigger",
@@ -79,11 +80,20 @@ export const list = query({
   args: {},
   handler: async (ctx) => {
     const principal = await requirePrincipal(ctx);
-    return ctx.db
-      .query("workflows")
+    const summaries = await ctx.db
+      .query("workflowSummaries")
       .withIndex("by_owner_updated_at", (q) => q.eq("ownerKey", principal.ownerKey))
       .order("desc")
       .collect();
+    return summaries.map((summary) => ({
+      _id: summary.workflowId,
+      externalId: summary.externalId,
+      name: summary.name,
+      enabled: summary.enabled,
+      nodeCount: summary.nodeCount,
+      version: summary.version,
+      updatedAt: summary.updatedAt,
+    }));
   },
 });
 
@@ -105,13 +115,13 @@ export const listVersions = query({
   handler: async (ctx, { externalId }) => {
     const principal = await requirePrincipal(ctx);
     const workflow = await ctx.db
-      .query("workflows")
+      .query("workflowSummaries")
       .withIndex("by_owner_external_id", (q) => q.eq("ownerKey", principal.ownerKey).eq("externalId", externalId))
       .unique();
     if (!workflow) throw new Error("Workflow not found.");
     const versions = await ctx.db
-      .query("workflowVersions")
-      .withIndex("by_workflow_version", (q) => q.eq("workflowId", workflow._id))
+      .query("workflowVersionSummaries")
+      .withIndex("by_workflow_version", (q) => q.eq("workflowId", workflow.workflowId))
       .order("desc")
       .take(50);
     return {
@@ -120,7 +130,7 @@ export const listVersions = query({
       publishedVersionId: workflow.publishedVersionId,
       publishedVersion: workflow.publishedVersion,
       versions: versions.map((version) => ({
-        _id: version._id,
+        _id: version.workflowVersionId,
         version: version.version,
         createdAt: version.createdAt,
       })),
@@ -181,13 +191,20 @@ export const publish = mutation({
     const webhookSecret = publishedWebhookSlug
       ? workflow.webhookSecret ?? crypto.randomUUID().replaceAll("-", "")
       : workflow.webhookSecret;
+    const updatedAt = Date.now();
     await ctx.db.patch(workflow._id, {
       publishedVersionId: version._id,
       publishedVersion: version.version,
       publishedWebhookSlug,
       webhookSecret,
       publishedOwnerUserId: connectionOwners.values().next().value ?? workflow.ownerUserId,
-      updatedAt: Date.now(),
+      updatedAt,
+    });
+    await upsertWorkflowSummary(ctx, {
+      ...workflow,
+      publishedVersionId: version._id,
+      publishedVersion: version.version,
+      updatedAt,
     });
     return version.version;
   },
@@ -220,11 +237,26 @@ export const rollback = mutation({
       edges: target.edges,
       createdAt: now,
     });
+    await insertWorkflowVersionSummary(ctx, {
+      ownerKey: principal.ownerKey,
+      workflowId: workflow._id,
+      workflowVersionId: currentVersionId,
+      version,
+      createdAt: now,
+    });
     await ctx.db.patch(workflow._id, {
       name: target.name,
       description: target.description,
       nodes: target.nodes,
       edges: target.edges,
+      version,
+      currentVersionId,
+      updatedAt: now,
+    });
+    await upsertWorkflowSummary(ctx, {
+      ...workflow,
+      name: target.name,
+      nodes: target.nodes,
       version,
       currentVersionId,
       updatedAt: now,
@@ -302,9 +334,11 @@ export const upsert = mutation({
       const version = existing.currentVersionId && !changed
         ? existing.version ?? 1
         : (existing.version ?? 0) + 1;
+      let currentVersionId = existing.currentVersionId;
       await ctx.db.patch(existing._id, { ...normalizedArgs, ...ownership, webhookSlug, webhookSecret, version });
       if (!existing.currentVersionId || changed) {
-        const currentVersionId = await ctx.db.insert("workflowVersions", {
+        const createdAt = Date.now();
+        currentVersionId = await ctx.db.insert("workflowVersions", {
           ownerKey: principal.ownerKey,
           workflowId: existing._id,
           version,
@@ -313,19 +347,34 @@ export const upsert = mutation({
           enabled: normalizedArgs.enabled,
           nodes: normalizedArgs.nodes,
           edges: normalizedArgs.edges,
-          createdAt: Date.now(),
+          createdAt,
         });
         await ctx.db.patch(existing._id, { currentVersionId });
+        await insertWorkflowVersionSummary(ctx, {
+          ownerKey: principal.ownerKey,
+          workflowId: existing._id,
+          workflowVersionId: currentVersionId,
+          version,
+          createdAt,
+        });
       }
+      await upsertWorkflowSummary(ctx, {
+        ...existing,
+        ...normalizedArgs,
+        ...ownership,
+        version,
+        currentVersionId,
+      });
       return existing._id;
     }
+    const createdAt = Date.now();
     const workflowId = await ctx.db.insert("workflows", {
       ...normalizedArgs,
       ...ownership,
       webhookSlug,
       webhookSecret,
       version: 1,
-      createdAt: Date.now(),
+      createdAt,
     });
     const currentVersionId = await ctx.db.insert("workflowVersions", {
       ownerKey: principal.ownerKey,
@@ -336,9 +385,30 @@ export const upsert = mutation({
       enabled: normalizedArgs.enabled,
       nodes: normalizedArgs.nodes,
       edges: normalizedArgs.edges,
-      createdAt: Date.now(),
+      createdAt,
     });
     await ctx.db.patch(workflowId, { currentVersionId });
+    await insertWorkflowVersionSummary(ctx, {
+      ownerKey: principal.ownerKey,
+      workflowId,
+      workflowVersionId: currentVersionId,
+      version: 1,
+      createdAt,
+    });
+    await upsertWorkflowSummary(ctx, {
+      _id: workflowId,
+      ownerKey: principal.ownerKey,
+      externalId: normalizedArgs.externalId,
+      name: normalizedArgs.name,
+      enabled: normalizedArgs.enabled,
+      nodes: normalizedArgs.nodes,
+      version: 1,
+      currentVersionId,
+      publishedVersionId: undefined,
+      publishedVersion: undefined,
+      createdAt,
+      updatedAt: normalizedArgs.updatedAt,
+    });
     return workflowId;
   },
 });
@@ -367,6 +437,14 @@ export const rename = mutation({
       createdAt: now,
     });
     await ctx.db.patch(workflowId, { name: trimmed, version, currentVersionId, updatedAt: now });
+    await insertWorkflowVersionSummary(ctx, {
+      ownerKey: principal.ownerKey,
+      workflowId,
+      workflowVersionId: currentVersionId,
+      version,
+      createdAt: now,
+    });
+    await upsertWorkflowSummary(ctx, { ...workflow, name: trimmed, version, currentVersionId, updatedAt: now });
   },
 });
 
@@ -416,6 +494,27 @@ export const duplicate = mutation({
       createdAt: now,
     });
     await ctx.db.patch(duplicatedWorkflowId, { currentVersionId });
+    await insertWorkflowVersionSummary(ctx, {
+      ownerKey: principal.ownerKey,
+      workflowId: duplicatedWorkflowId,
+      workflowVersionId: currentVersionId,
+      version: 1,
+      createdAt: now,
+    });
+    await upsertWorkflowSummary(ctx, {
+      _id: duplicatedWorkflowId,
+      ownerKey: principal.ownerKey,
+      externalId,
+      name: trimmed,
+      enabled: false,
+      nodes: source.nodes,
+      version: 1,
+      currentVersionId,
+      publishedVersionId: undefined,
+      publishedVersion: undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
     return duplicatedWorkflowId;
   },
 });
@@ -426,7 +525,7 @@ export const remove = mutation({
     const principal = await requirePrincipal(ctx);
     const workflow = await ctx.db.get(workflowId);
     if (!workflow || workflow.ownerKey !== principal.ownerKey) throw new Error("Workflow not found.");
-    const [runs, versions, triggerEvents, runClaims] = await Promise.all([
+    const [runs, versions, triggerEvents, runClaims, summary, versionSummaries] = await Promise.all([
       ctx.db.query("workflowRuns").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
       ctx.db
         .query("workflowVersions")
@@ -434,23 +533,33 @@ export const remove = mutation({
         .collect(),
       ctx.db.query("triggerEvents").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).collect(),
       ctx.db.query("runClaims").withIndex("by_workflow_key", (q) => q.eq("workflowId", workflowId)).collect(),
+      ctx.db.query("workflowSummaries").withIndex("by_workflow", (q) => q.eq("workflowId", workflowId)).unique(),
+      ctx.db.query("workflowVersionSummaries").withIndex("by_workflow_version", (q) => q.eq("workflowId", workflowId)).collect(),
     ]);
     await Promise.all(runs.map(async (run) => {
-      const [steps, agentTasks, auditLogs] = await Promise.all([
+      const [steps, agentTasks, auditLogs, runLive, stepLive, agentLive] = await Promise.all([
         ctx.db.query("stepRuns").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
         ctx.db.query("agentTasks").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
         ctx.db.query("auditLogs").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+        ctx.db.query("runLiveStates").withIndex("by_run", (q) => q.eq("runId", run._id)).unique(),
+        ctx.db.query("stepLiveStates").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
+        ctx.db.query("agentTaskLiveStates").withIndex("by_run", (q) => q.eq("runId", run._id)).collect(),
       ]);
       await Promise.all([
         ...steps.map((step) => ctx.db.delete(step._id)),
         ...agentTasks.map((task) => ctx.db.delete(task._id)),
         ...auditLogs.map((auditLog) => ctx.db.delete(auditLog._id)),
+        ...stepLive.map((step) => ctx.db.delete(step._id)),
+        ...agentLive.map((task) => ctx.db.delete(task._id)),
+        ...(runLive ? [ctx.db.delete(runLive._id)] : []),
       ]);
       await ctx.db.delete(run._id);
     }));
     await Promise.all(versions.map((version) => ctx.db.delete(version._id)));
+    await Promise.all(versionSummaries.map((version) => ctx.db.delete(version._id)));
     await Promise.all(triggerEvents.map((event) => ctx.db.delete(event._id)));
     await Promise.all(runClaims.map((claim) => ctx.db.delete(claim._id)));
+    if (summary) await ctx.db.delete(summary._id);
     await ctx.db.delete(workflowId);
   },
 });

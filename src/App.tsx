@@ -22,6 +22,7 @@ import {
   approveRunRef,
   convexClient,
   decidePlanRef,
+  getLiveRunRef,
   getRunRef,
   getWorkflowRef,
   listWorkflowVersionsRef,
@@ -34,6 +35,7 @@ import {
   publishWorkflowRef,
   upsertWorkflowRef,
   type BuildChatMessage,
+  type StoredLiveRun,
   type StoredRun,
 } from "./lib/convexClient";
 import { materializeProposal } from "./lib/buildProposal";
@@ -146,6 +148,7 @@ function useWorkflowEditorController() {
   const saveTimer = useRef<number | undefined>(undefined);
   const hydratedOnce = useRef(false);
   const latestRunHydrated = useRef(false);
+  const activeRunWatchRef = useRef<(() => void) | undefined>(undefined);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const skipInitialSave = useRef(true);
@@ -532,29 +535,89 @@ function useWorkflowEditorController() {
     );
   }, [patchEditor, setLatestResult, setNodes]);
 
+  const applyLiveRun = useCallback((run: StoredLiveRun, runId: Id<"workflowRuns">) => {
+    setLatestResult({
+      id: runId,
+      status: run.status,
+      error: run.error,
+      steps: run.steps.map((step) => ({ id: step._id, ...step })),
+    });
+
+    const waiting = [...run.steps].reverse().find((step) => step.status === "waiting");
+    if (waiting && waiting.plan?.status === "proposed") {
+      patchEditor({
+        pendingApproval: undefined,
+        pendingPlanReview: {
+          backendRunId: runId,
+          nodeId: waiting.nodeId,
+          title: waiting.nodeLabel,
+          steps: waiting.plan.steps.map((planStep) => planStep.title),
+        },
+      });
+    } else if (waiting) {
+      const workflowNode = nodesRef.current.find((node) => node.id === waiting.nodeId);
+      patchEditor({
+        pendingPlanReview: undefined,
+        pendingApproval: {
+          backendRunId: runId,
+          nodeId: waiting.nodeId,
+          title: waiting.nodeLabel,
+          prompt: String(workflowNode?.data.config.prompt ?? "Approve this result?"),
+          input: waiting.input,
+        },
+      });
+    } else patchEditor({ pendingApproval: undefined, pendingPlanReview: undefined });
+
+    setNodes((current) => current.map((node) => {
+      const latest = [...run.steps].reverse().find((step) => step.nodeId === node.id);
+      const status = latest?.status === "completed"
+        ? "success"
+        : latest?.status === "failed"
+          ? "error"
+          : latest?.status === "waiting"
+            ? "waiting"
+            : latest
+              ? "running"
+              : "idle";
+      return node.data.status === status ? node : { ...node, data: { ...node.data, status } };
+    }));
+  }, [patchEditor, setLatestResult, setNodes]);
+
   const observeBackendRun = useCallback((
     client: NonNullable<typeof convexClient>,
     runId: Id<"workflowRuns">,
-  ) => new Promise<void>((resolve, reject) => {
-    const watch = client.watchQuery(getRunRef, { runId });
+  ) => {
+    const watch = client.watchQuery(getLiveRunRef, { runId });
     let unsubscribe = () => {};
-    unsubscribe = watch.onUpdate(() => {
-      try {
-        const run = watch.localQueryResult();
-        if (!run) return;
-        applyBackendRun(run, runId);
+    let settled = false;
+    const promise = new Promise<void>((resolve, reject) => {
+      unsubscribe = watch.onUpdate(() => {
+        try {
+          const run = watch.localQueryResult();
+          if (!run) return;
+          applyLiveRun(run, runId);
 
-        if (run.status === "completed" || run.status === "failed") {
+          if (!settled && (run.status === "completed" || run.status === "failed")) {
+            settled = true;
+            unsubscribe();
+            void client.query(getRunRef, { runId }).then((stored) => {
+              if (stored) applyBackendRun(stored, runId);
+              if (run.status === "failed") reject(new Error(run.error ?? "Workflow failed."));
+              else resolve();
+            }, reject);
+          }
+        } catch (error) {
+          if (settled) return;
+          settled = true;
           unsubscribe();
-          if (run.status === "failed") reject(new Error(run.error ?? "Workflow failed."));
-          else resolve();
+          reject(error);
         }
-      } catch (error) {
-        unsubscribe();
-        reject(error);
-      }
+      });
     });
-  }), [applyBackendRun]);
+    return { promise, cancel: () => { settled = true; unsubscribe(); } };
+  }, [applyBackendRun, applyLiveRun]);
+
+  useEffect(() => () => activeRunWatchRef.current?.(), []);
 
   useEffect(() => {
     if (!backendLoaded || !convexClient || latestRunHydrated.current) return;
@@ -563,10 +626,18 @@ function useWorkflowEditorController() {
     const client = convexClient;
     void client.query(latestRunRef, { externalWorkflowId: initial.id }).then((run) => {
       if (disposed || !run) return;
-      applyBackendRun(run, run._id);
-      if (run.status !== "queued" && run.status !== "running" && run.status !== "waiting") return;
+      applyLiveRun(run, run._id);
+      if (run.status !== "queued" && run.status !== "running" && run.status !== "waiting") {
+        void client.query(getRunRef, { runId: run._id }).then((stored) => {
+          if (!disposed && stored) applyBackendRun(stored, run._id);
+        });
+        return;
+      }
       patchEditor({ running: true, panelMode: "run" });
-      void observeBackendRun(client, run._id)
+      const observer = observeBackendRun(client, run._id);
+      activeRunWatchRef.current?.();
+      activeRunWatchRef.current = observer.cancel;
+      void observer.promise
         .catch((error) => {
           if (disposed) return;
           setLatestResult((current) => ({
@@ -586,8 +657,12 @@ function useWorkflowEditorController() {
         });
       }
     });
-    return () => { disposed = true; };
-  }, [applyBackendRun, backendLoaded, initial.id, observeBackendRun, patchEditor, setLatestResult, setNotice]);
+    return () => {
+      disposed = true;
+      activeRunWatchRef.current?.();
+      activeRunWatchRef.current = undefined;
+    };
+  }, [applyBackendRun, applyLiveRun, backendLoaded, initial.id, observeBackendRun, patchEditor, setLatestResult, setNotice]);
 
   const runWorkflow = async (runMode: EditorRunMode = "full", scopeNodeId?: string) => {
     if (running) return;
@@ -656,7 +731,10 @@ function useWorkflowEditorController() {
       });
       setLatestResult({ id: runId, status: "queued" });
 
-      await observeBackendRun(client, runId);
+      const observer = observeBackendRun(client, runId);
+      activeRunWatchRef.current?.();
+      activeRunWatchRef.current = observer.cancel;
+      await observer.promise;
     } catch (error) {
       void refreshConnections().catch(() => undefined);
       setLatestResult((current) => ({
@@ -678,7 +756,10 @@ function useWorkflowEditorController() {
         runId: latestResult.id as Id<"workflowRuns">,
       });
       setLatestResult({ id: runId, status: "queued" });
-      await observeBackendRun(convexClient, runId);
+      const observer = observeBackendRun(convexClient, runId);
+      activeRunWatchRef.current?.();
+      activeRunWatchRef.current = observer.cancel;
+      await observer.promise;
     } catch (error) {
       setLatestResult((current) => ({
         ...current,
