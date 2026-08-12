@@ -130,18 +130,17 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const redirectUrl = existing ? window.location.href : `${window.location.origin}/sso-callback`;
+      const redirectUrl = `${window.location.origin}/sso-callback`;
+      window.sessionStorage.setItem(GOOGLE_PENDING_KEY, "true");
       const account = existing
-        ? await existing.reauthorize({ additionalScopes: GOOGLE_SCOPES, redirectUrl, oidcPrompt: "consent" })
+        ? await existing.reauthorize({ additionalScopes: GOOGLE_SCOPES, redirectUrl })
         : await createGoogleAccount({
             strategy: "oauth_google",
             additionalScopes: GOOGLE_SCOPES,
             redirectUrl,
-            oidcPrompt: "consent",
           });
       const verificationUrl = account?.verification?.externalVerificationRedirectURL;
       if (!verificationUrl) throw new Error("Clerk did not return a Google authorization URL.");
-      window.sessionStorage.setItem(GOOGLE_PENDING_KEY, "true");
       window.location.assign(verificationUrl.href);
     } catch (error) {
       window.sessionStorage.removeItem(GOOGLE_PENDING_KEY);

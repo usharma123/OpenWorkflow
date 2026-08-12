@@ -77,11 +77,14 @@ Repeat the same configuration with production Clerk values on the production Con
 OpenWorkflow requests only:
 
 - `https://www.googleapis.com/auth/gmail.readonly`
+- `https://www.googleapis.com/auth/gmail.send`
 - `https://www.googleapis.com/auth/documents`
 - `https://www.googleapis.com/auth/drive.file`
 - `https://www.googleapis.com/auth/drive.metadata.readonly`
 - `https://www.googleapis.com/auth/calendar.readonly`
+- `https://www.googleapis.com/auth/calendar.events`
 - `https://www.googleapis.com/auth/spreadsheets.readonly`
+- `https://www.googleapis.com/auth/spreadsheets`
 
 In Google Cloud:
 
@@ -94,7 +97,8 @@ In Clerk:
 
 1. Add Google as a social connection.
 2. Enable custom credentials and enter the Google client ID and secret.
-3. Configure the additional scopes above.
+3. Configure all nine additional scopes above. The initial sign-in can establish the Workspace
+   grant only when this list exactly matches the runtime scope list in `shared/googleScopes.ts`.
 4. Activate the connection.
 
 Those Clerk connection scopes are what make the initial Google sign-in double as a Workspace

@@ -22,7 +22,6 @@ export function SignInScreen() {
         strategy: "oauth_google",
         redirectUrl: "/setup",
         redirectCallbackUrl: `${window.location.origin}/sso-callback`,
-        oidcPrompt: "consent",
       });
       if (cause) throw new Error(cause.message ?? "Google sign-in was rejected.");
     } catch (cause) {

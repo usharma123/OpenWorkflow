@@ -2,6 +2,7 @@
 
 import { createClerkClient } from "@clerk/backend";
 import { ConvexError, v } from "convex/values";
+import { GOOGLE_SCOPES } from "../shared/googleScopes";
 import { internal } from "./_generated/api";
 import { action, internalAction } from "./_generated/server";
 import { requirePrincipal } from "./auth";
@@ -9,17 +10,6 @@ import { decryptSecret, encryptSecret, hashValue, randomState } from "./secretCr
 import { hasRequiredScopes } from "./policies";
 
 const GOOGLE_PROVIDER = "google" as const;
-const GOOGLE_REQUIRED_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/documents",
-  "https://www.googleapis.com/auth/drive.file",
-  "https://www.googleapis.com/auth/drive.metadata.readonly",
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/calendar.events",
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
-  "https://www.googleapis.com/auth/spreadsheets",
-];
 
 const connectionFailure = (code: string, message: string) => new ConvexError({ code, message });
 
@@ -75,7 +65,7 @@ export const syncGoogle = action({
         displayName: "Google Workspace",
         ownerLabel: token.label || "Connected Google account",
         scopes,
-        status: hasRequiredScopes(scopes, GOOGLE_REQUIRED_SCOPES) ? "active" : "needs_reauth",
+        status: hasRequiredScopes(scopes, GOOGLE_SCOPES) ? "active" : "needs_reauth",
       });
     }));
     return { count: tokens.length };
