@@ -1,0 +1,40 @@
+flowchart TB
+  L["Lead agent — Luna via OpenRouter<br/>picks tools for up to 12 rounds"]
+
+  subgraph R["Research"]
+    direction LR
+    S["web_search<br/>one Exa query"]
+    B["batch_web_search<br/>up to 6 queries"]
+    F["fetch_url<br/>public HTTPS, SSRF-guarded"]
+  end
+
+  subgraph K["spawn_subagents"]
+    direction LR
+    K1["1 to 3 parallel children"]
+    K2["search and fetch only"]
+    K3["no sandbox, no recursion"]
+  end
+
+  subgraph D["Daytona sandbox — created on first compute tool"]
+    direction LR
+    C["run_code<br/>Python / JS / TS"]
+    SH["run_shell<br/>allowlisted"]
+    G["clone_repo<br/>public HTTPS"]
+    RW["read / write files"]
+    A["publish_artifact"]
+  end
+
+  subgraph P["Approved plan"]
+    M["mark_plan_step<br/>active, done, skipped"]
+  end
+
+  O["Next step receives content, citations, artifacts, and toolTrace"]
+
+  L --> R
+  L --> K
+  L --> D
+  L --> P
+  R --> O
+  K --> O
+  D --> O
+  P --> O

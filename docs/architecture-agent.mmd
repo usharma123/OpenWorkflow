@@ -1,0 +1,28 @@
+flowchart TD
+  START["Agent step in the workflow"] --> COMPUTE{"Use compute?"}
+
+  COMPUTE -->|"off — lightweight"| STREAM["Stream OpenRouter completion"]
+  STREAM --> WEB{"OpenRouter web search?"}
+  WEB -->|optional| STREAM
+  STREAM --> LIVE1["Patch live text every 200ms"]
+  LIVE1 --> NEXT["Pass content to the next step"]
+
+  COMPUTE -->|"on — Luna + tools"| PLANQ{"Plan first?"}
+
+  PLANQ -->|yes| GEN["generatePlan: Luna must call propose_plan"]
+  GEN --> WAIT["Run pauses — status waiting"]
+  WAIT --> USER{"User reviews the plan"}
+  USER -->|reject| STOP["Run fails. No tools ran."]
+  USER -->|approve or edit| EXEC["runAgent — tool loop"]
+  PLANQ -->|no| EXEC
+
+  EXEC --> ROUND["OpenRouter chat round with tools"]
+  ROUND --> CALL{"Function calls?"}
+  CALL -->|yes, and budget left| DO["Validate and dispatch tools"]
+  DO --> TRACE["Append toolTrace + live transcript"]
+  TRACE --> ROUND
+  CALL -->|no, or last round| SYNTH["Final answer with tools off"]
+
+  SYNTH --> OUT["Return content, citations, artifacts, subagents"]
+  OUT --> CLEAN["Delete Daytona sandbox"]
+  CLEAN --> NEXT

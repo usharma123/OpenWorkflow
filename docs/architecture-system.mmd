@@ -1,0 +1,42 @@
+flowchart TB
+  subgraph USER["User / browser"]
+    U["Signed-in user"]
+    APP["React editor on Vercel<br/>React Flow · draft autosave · live transcript"]
+  end
+
+  subgraph AUTH["Auth"]
+    CLERK["Clerk<br/>session JWT · org tenancy<br/>Google OAuth tokens stay here"]
+  end
+
+  subgraph BACKEND["Convex backend"]
+    AUTHZ["Auth + owner key<br/>org:id or user:id"]
+    DEFS["Workflows + versions<br/>draft vs published"]
+    ENGINE["Durable run engine<br/>@convex-dev/workflow"]
+    LIVE["Live state<br/>watchQuery patches"]
+    HTTP["HTTP<br/>/webhooks/:slug<br/>/oauth/slack/callback"]
+    CRON["Crons every 1 min<br/>schedules · Google poll"]
+  end
+
+  subgraph INTEG["Integrations"]
+    OR["OpenRouter<br/>LLM SSE"]
+    GOOG["Google Workspace<br/>Gmail · Docs · Drive · Cal · Sheets"]
+    SLACK["Slack<br/>chat:write"]
+    DAY["Daytona<br/>code · shell · git"]
+    EXA["Exa<br/>web search"]
+  end
+
+  U -->|"builds graph / hits Run"| APP
+  APP -->|"sign in"| CLERK
+  APP -->|"queries + mutations"| AUTHZ
+  CLERK -->|"verified JWT"| AUTHZ
+  AUTHZ --> DEFS
+  DEFS --> ENGINE
+  ENGINE --> LIVE
+  LIVE -.->|"realtime transcript"| APP
+  HTTP --> ENGINE
+  CRON --> ENGINE
+  ENGINE --> OR
+  ENGINE -->|"fresh token from Clerk"| GOOG
+  ENGINE -->|"decrypt bot token"| SLACK
+  ENGINE --> DAY
+  ENGINE --> EXA

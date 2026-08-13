@@ -2,6 +2,8 @@
 
 OpenWorkflow is an authenticated, owner-isolated visual agent builder built with Vite, React, Convex, Clerk, and Vercel. Agents connect triggers, model reasoning, tools, decisions, and human approvals as durable workflows.
 
+See [docs/architecture.md](docs/architecture.md) for a Mermaid diagram of user → app → Convex → integrations.
+
 Gmail, Google Docs, and Slack are included integrations—not the product boundary. One starter workflow demonstrates this path:
 
 ```text
